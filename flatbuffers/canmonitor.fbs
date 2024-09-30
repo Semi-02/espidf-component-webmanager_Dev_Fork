@@ -1,0 +1,11 @@
+namespace webmanager;
+
+struct CanData{
+    data:[uint8:8];
+}
+
+table NotifyCanMessage{
+    message_id:uint32;
+    data:CanData;
+    data_len:uint8;
+}

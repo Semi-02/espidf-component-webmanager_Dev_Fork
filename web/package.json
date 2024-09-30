@@ -1,0 +1,28 @@
+{
+  "name": "vite_lit",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "wss": "ts-node ../testserver/index.ts",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "it": "concurrently \"npm run wss\" \"npm run dev\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "chartist": "^1.3.0",
+    "esbuild-minify-templates": "^0.11.0",
+    "vite": "^5.2.11",
+    "vite-plugin-svgo": "^1.4.0"
+  },
+  "dependencies": {
+    "flatbuffers": "^24.3.25",
+    "lit-html": "^3.1.3"
+  }
+}

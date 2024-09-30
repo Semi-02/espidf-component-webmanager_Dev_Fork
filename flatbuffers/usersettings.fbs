@@ -1,0 +1,49 @@
+namespace webmanager;
+
+
+
+table StringSetting{
+    value:string;
+}
+
+table IntegerSetting{
+    value:int;
+} 
+
+table BooleanSetting{
+    value:bool;
+}
+
+table EnumSetting{
+    value:int;
+}
+
+union Setting{
+    StringSetting, 
+    IntegerSetting, 
+    BooleanSetting, 
+    EnumSetting,
+}
+
+table SettingWrapper{
+    settingKey:string;
+    setting:Setting;
+}
+
+table RequestGetUserSettings{
+    groupKey:string;
+}
+
+table ResponseGetUserSettings{
+    groupKey:string;
+    settings:[SettingWrapper];
+}
+
+table RequestSetUserSettings{
+    groupKey:string;
+    settings:[SettingWrapper];
+} 
+table ResponseSetUserSettings{
+    groupKey:string;
+    settingKeys:[string];
+}

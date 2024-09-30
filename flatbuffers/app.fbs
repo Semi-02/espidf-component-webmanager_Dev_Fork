@@ -1,0 +1,99 @@
+include "wifi.fbs";
+include "systeminfo.fbs";
+include "usersettings.fbs";
+include "timeseries.fbs";
+include "websensact.fbs";
+include "fingerprint.fbs";
+include "canmonitor.fbs";
+include "scheduler.fbs";
+
+namespace webmanager;
+
+table RequestJournal{}
+
+table JournalItem{
+    last_message_timestamp:uint64;
+    message_code:uint32;
+    message_string:string;
+    message_data:uint32;
+    message_count:uint32;
+}
+
+table ResponseJournal{
+    journal_items:[JournalItem];
+}
+
+table NotifyLiveLogItem{
+    text:string;
+}
+union Responses{
+    websensact.ResponseCommand,
+    websensact.ResponseStatus,
+    websensact.NotifyStatus,
+    NotifyCanMessage,
+    NotifyLiveLogItem, 
+    ResponseNetworkInformation, 
+    ResponseWifiConnectSuccessful, 
+    ResponseWifiConnectFailed, 
+    ResponseWifiDisconnect, 
+    ResponseSystemData, 
+    ResponseJournal, 
+    ResponseGetUserSettings, 
+    ResponseSetUserSettings,
+    ResponseTimeseriesDummy,
+//fingerprint start
+    ResponseStoreFingerAction,
+    ResponseStoreFingerSchedule,
+    ResponseFingerActionManually,
+    ResponseEnrollNewFinger,
+    NotifyEnrollNewFinger,
+    NotifyFingerDetected,
+    ResponseDeleteFinger,
+    ResponseRenameFinger,
+    ResponseFingerprintSensorInfo,
+    ResponseDeleteAllFingers,
+    ResponseFingers,
+    ResponseCancelInstruction,
+//fingerprint end
+//scheduler start
+    scheduler.ResponseScheduler,
+//scheduler end
+}
+
+union Requests{
+    websensact.RequestCommand,
+    websensact.RequestStatus,
+    RequestNetworkInformation, 
+    RequestWifiConnect, 
+    RequestWifiDisconnect, 
+    RequestSystemData, 
+    RequestJournal, 
+    RequestRestart, 
+    RequestGetUserSettings, 
+    RequestSetUserSettings, 
+    RequestTimeseries,
+//fingerprint start
+    RequestStoreFingerAction,
+    RequestStoreFingerSchedule,
+    RequestFingerActionManually,
+    RequestEnrollNewFinger,
+    RequestDeleteFinger,
+    RequestDeleteAllFingers,
+    RequestRenameFinger,
+    RequestFingerprintSensorInfo,
+    RequestFingers,
+    RequestCancelInstruction,
+//fingerprint end
+//scheduler start
+    scheduler.RequestScheduler,
+//scheduler end
+    }
+
+
+table RequestWrapper{
+    request:Requests;
+}
+
+table ResponseWrapper{
+    response:Responses;
+}

@@ -1,0 +1,61 @@
+
+dialog {
+  padding: 0;
+  border: 0;
+  border-radius: 0.6rem;
+  box-shadow: 0 0 1em black;
+  min-width: 30vw;
+
+  header>button {
+    position: absolute;
+    top: 0.2em;
+    right: 0.2em;
+    padding: 0.3em;
+    line-height: 0.6;
+    background-color: transparent;
+    border: 0;
+    font-size: 2em;
+  }
+
+  header,
+  main,
+  footer {
+    padding: 1em;
+  }
+
+  
+
+  header {
+    margin: 0;
+    padding-bottom: 0.6em;
+    background-color: var(--blue-7);
+    border-top-left-radius: 0.6rem;
+    border-top-right-radius: 0.6rem;
+    border-bottom: 1px solid var(--blue-5);
+  }
+
+  main>section:nth-child(1){
+    font-size: xx-large;
+  }
+
+  footer {
+    border-top: 1px solid var(--blue-5);
+
+    button {
+      padding: 0.4em 1em 0.2em;
+    }
+  }
+}
+
+dialog.simple main{
+  display: grid;
+  grid-template-columns: 50px 1fr;
+}
+
+dialog::backdrop {
+  background-color: rgba(0, 0, 0, 0.4);
+}
+
+dialog[open] {
+  animation: slide-up 0.4s ease-out;
+}
