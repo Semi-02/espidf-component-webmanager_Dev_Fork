@@ -49,6 +49,7 @@ export const DEST_FLATBUFFERS_TYPESCRIPT_WEBUI = path.join(WEB_SRC_GENERATED, "f
 export const DEST_SENSACT_TYPESCRIPT_WEBUI =     path.join(WEB_SRC_GENERATED, "sensact");
 export const DEST_USERSETTINGS_PATH =            path.join(WEB_SRC_GENERATED, "usersettings", "usersettings.ts");
 export const DEST_FLATBUFFERS_TYPESCRIPT_SERVER = path.join(TESTSERVER_GENERATED, "flatbuffers");
+export const DEST_SENSACT_TYPESCRIPT_SERVER =     path.join(TESTSERVER_GENERATED, "sensact");
 
 export const HOSTNAME_FILE = path.join(CERTIFICATES, "esp32_hostname.txt");
 

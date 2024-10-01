@@ -6,19 +6,18 @@ import { Ref, createRef, ref } from "lit-html/directives/ref.js";
 import { ApplicationGroup, SensactApplication } from "../utils/sensactapps_base";
 
 import bed from '../../svgs/solid/bed.svg?raw'
-import layer_group from '../../svgs/solid/layer-group.svg?raw'
 import lightbulb from '../../svgs/solid/lightbulb.svg?raw'
 import { unsafeSVG } from "lit-html/directives/unsafe-svg.js";
 import { GetLevelFromApplicationId, GetRoomFromApplicationId, GetTechnologyFromApplicationId } from "../utils/sensact";
 
 import "../utils/extensions";
-import { RequestCommand } from "../../generated/flatbuffers/websensact/request-command";
 import { NotifyStatus } from "../../generated/flatbuffers/websensact/notify-status";
 import { ResponseCommand } from "../../generated/flatbuffers/websensact/response-command";
-import { ApplicationId } from "../../generated/flatbuffers/application-id";
 import { ResponseStatus } from "../../generated/flatbuffers/websensact/response-status";
 
 export class WebsensactController extends ScreenController{
+    
+    private groups: Array<ApplicationGroup>;
     
     private btnSortTechnology() {
         var tech2apps = new Map<string, Array<SensactApplication>>()
@@ -28,12 +27,11 @@ export class WebsensactController extends ScreenController{
             arr.push(app);
         }
         var sortedMap = new Map([...tech2apps.entries()].sort((a,b)=>a[0].localeCompare(b[0])));
-        var templates= new Array<TemplateResult<1>>();
+        this.groups=[];
         sortedMap.forEach((v,k)=>{
-            var group = new ApplicationGroup(k, this.appManagement, v, k);
-            templates.push(group.Template());
+            this.groups.push(new ApplicationGroup(k, this.appManagement, v, k));
         });
-        render(templates, this.mainElement.value!)
+        this.execTemplates();
     }
     private btnSortRooms() {
         var level_room2apps = new Map<string, Array<SensactApplication>>()
@@ -43,9 +41,15 @@ export class WebsensactController extends ScreenController{
             arr.push(app);
         }
         var sortedMap = new Map([...level_room2apps.entries()].sort((a,b)=>a[0].localeCompare(b[0])));
-        var templates= new Array<TemplateResult<1>>();
+        this.groups=[];
         sortedMap.forEach((v,k)=>{
-            var group = new ApplicationGroup(k, this.appManagement, v, k);
+            this.groups.push(new ApplicationGroup(k, this.appManagement, v, k));
+        });
+        this.execTemplates();
+    }
+    private execTemplates(){
+        var templates= new Array<TemplateResult<1>>();
+        this.groups.forEach((group)=>{
             templates.push(group.Template());
         });
         render(templates, this.mainElement.value!)
@@ -61,7 +65,7 @@ export class WebsensactController extends ScreenController{
     </div>
     <section ${ref(this.mainElement)}></section>`
     
-    private sensactApps:Map<string, SensactApplication>;
+    private sensactApps:Map<number, SensactApplication>;
 
 
     public onMessage(messageWrapper: ResponseWrapper): void {
@@ -78,20 +82,27 @@ export class WebsensactController extends ScreenController{
             default:
                 break;
         }
+        this.execTemplates()
     }
     private onResponseCommand(m: ResponseCommand) {
         console.log("Command confirmed");
     }
     private onNotifyStatus(m: NotifyStatus) {
-        var app=this.sensactApps.get(ApplicationId[m.id()]);
-        if(!app) return;
+        var app=this.sensactApps.get(m.id());
+        if(!app){
+            console.warn(`Unknown app with id ${m.id()}`)
+            return;
+        }
         app.UpdateState(m.status());
     }
 
     private onResponseStatus(m:ResponseStatus){
         for(var i=0; i<m.statesLength();i++){
-            var app = this.sensactApps.get(ApplicationId[ m.states(i).id()])
-            if(!app) return;
+            var app = this.sensactApps.get(m.states(i).id())
+            if(!app){
+                console.warn(`Unknown app with id ${m.states(i).id()}`)
+                continue;
+            }
             app.UpdateState(m.states(i).status());
         }
     }
@@ -99,8 +110,7 @@ export class WebsensactController extends ScreenController{
     
     onCreate(): void {
         this.appManagement.registerWebsocketMessageTypes(this, Responses.websensact_NotifyStatus, Responses.websensact_ResponseCommand, Responses.websensact_ResponseStatus);
-        this.sensactApps=new Map<string, SensactApplication>(BuildApps().map(v=>[ApplicationId[v.applicationId], v])); 
-       
+        this.sensactApps=new Map<number, SensactApplication>(BuildApps(this.appManagement).map(v=>[v.applicationId, v]));
     }
 
     private onStart_or_onRestart(){

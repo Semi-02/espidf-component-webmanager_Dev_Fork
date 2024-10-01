@@ -2,14 +2,14 @@
 import { TemplateResult, html } from 'lit-html';
 import * as flatbuffers from 'flatbuffers';
 import { Ref, createRef, ref } from 'lit-html/directives/ref.js';
-import { classMap } from 'lit-html/directives/class-map.js';
 import { ApplicationId } from "../../generated/flatbuffers/application-id";
-import { IAppManagement } from './interfaces';
+import { IAppManagement, ISensactContext } from './interfaces';
 import { Requests, Responses } from '../../generated/flatbuffers/webmanager';
 import { RequestStatus } from '../../generated/flatbuffers/websensact/request-status';
-import { ValueUpdater } from './usersettings_base';
+import { styleMap } from 'lit-html/directives/style-map.js';
+import * as x from "../../generated/sensact/sendCommandImplementation_copied_during_build"
 
-export enum ItemState {
+export enum SyncState {
   NODATA,
   SYNCHRONIZED,
   NONSYNCHRONIZED,
@@ -27,7 +27,6 @@ export class ApplicationGroup {
   }
 
   private panelOpen = false;
-  private dataDirty = false;
   public spanArrowContainer: Ref<HTMLElement> = createRef();
   public divPanel: Ref<HTMLTableSectionElement> = createRef();
   public btnOpenClose: Ref<HTMLElement> = createRef();
@@ -39,17 +38,17 @@ export class ApplicationGroup {
     var itemTemplates: Array<TemplateResult<1>> = [];
     for (const app of this.Apps) {
       itemTemplates.push(app.OverallTemplate());
-
     }
+    const divPanelStyle = { display: this.panelOpen ? 'block' : 'none'};
     return html`
     <div class="appgroup">
-        <button ${ref(this.btnOpenClose)} @click=${(e) => this.onBtnOpenCloseClicked(e)} style="display: flex; ">
+        <button ${ref(this.btnOpenClose)} @click=${(e) => this.onBtnOpenCloseClicked(e)} class="" style="display: flex; ">
             <span ${ref(this.spanArrowContainer)}>▶</span>
             <span style="flex-grow: 1;">${this.DisplayName}</span>
             <input ${ref(this.btnUpdate)} @click=${(e: MouseEvent) => this.onBtnUpdateClicked(e)} type="button" value=" ⟳ Fetch Values from Server" />
             <input ${ref(this.btnReset)} type="button" value=" 🗑 Reset Values" />
         </button>
-        <div ${ref(this.divPanel)}>
+        <div ${ref(this.divPanel)} style=${styleMap(divPanelStyle)}>
             <table>
                 <thead>
                     <tr><th>Name</th><th>ID</th><th>Controls</th></tr>
@@ -81,13 +80,15 @@ export class ApplicationGroup {
 
   private onBtnOpenCloseClicked(e: MouseEvent) {
     this.panelOpen = !this.panelOpen;
-    this.btnOpenClose.value!.classList.toggle("active");
+    console.info(`in onBtnOpenCloseClicked this.panelOpen=${this.panelOpen}`)
     if (this.panelOpen) {
       this.divPanel.value!.style.display = "block";
+      this.btnOpenClose.value!.classList.add("active");
       this.spanArrowContainer.value!.textContent = "▼";
       this.sendRequestGetApplicationStatus();
     } else {
       this.divPanel.value!.style.display = "none";
+      this.btnOpenClose.value!.classList.remove("active");
       this.spanArrowContainer.value!.textContent = "▶";
     }
     e.stopPropagation();
@@ -99,78 +100,56 @@ export class ApplicationGroup {
   }
 
 }
-const LEN_OF_APPLICATIONID_PREFIX=14;
+
 export abstract class SensactApplication {
 
-  protected itemState: ItemState = ItemState.NODATA;
-  public Flag: boolean = false; //for various use; eg. to check whether all Items got an update
-
+  protected syncState: SyncState = SyncState.NODATA;
 
   public abstract UpdateState(state32bit:number);
 
-  constructor(public readonly applicationId: ApplicationId, public readonly ApplicationName: string, public readonly ApplicationDescription: string,) { }
+  constructor(public readonly applicationId: ApplicationId, public readonly ApplicationDescription: string, public readonly ctx:ISensactContext) { }
 
   protected abstract CoreAppHtmlTemplate: () => TemplateResult<1>;
 
-  
   public OverallTemplate = () => html`
   <tr class="app">
-      <td>${this.ApplicationName}</td>
-      <td>${ApplicationId[this.applicationId].slice(LEN_OF_APPLICATIONID_PREFIX)}</td>
+      <td>${this.ApplicationDescription}</td>
+      <td>${ApplicationId[this.applicationId]}${this.syncState==SyncState.SYNCHRONIZED?"(sync)":"(no sync)"}</td>
       <td>${this.CoreAppHtmlTemplate()}</td>
   </tr>
   `
 
-  public NoDataFromServerAvailable() {
-    this.SetVisualState(ItemState.NODATA);
+  protected NoDataFromServerAvailable() {
+    this.syncState=SyncState.NODATA;
   }
 
-  public ConfirmSuccessfulWrite() {
-    this.SetVisualState(ItemState.SYNCHRONIZED);
+  protected ConfirmSuccessfulWrite() {
+    this.syncState=SyncState.SYNCHRONIZED;
   }
 
+  
 
-
-  protected SetVisualState(value: ItemState): void {
-    /*
-    this.inputElement.value!.className = "";
-    this.inputElement.value!.classList.add("config-item");
-    switch (value) {
-      case ItemState.NODATA:
-        this.inputElement.value!.classList.add("nodata");
-        this.inputElement.value!.disabled = true;
-        this.btnReset.value!.disabled = true;
-        break;
-      case ItemState.SYNCHRONIZED:
-        this.inputElement.value!.classList.add("synchronized");
-        this.inputElement.value!.disabled = false;
-        this.btnReset.value!.disabled = true;
-        break;
-      case ItemState.NONSYNCHRONIZED:
-        this.inputElement.value!.classList.add("nonsynchronized");
-        this.inputElement.value!.disabled = false;
-        this.btnReset.value!.disabled = false;
-        break;
-      default:
-        break;
-    }
-        */
-  }
+ 
 }
 
 export class OnOffApplication extends SensactApplication {
   private inputElement: Ref<HTMLInputElement> = createRef()
-  constructor(applicationId: ApplicationId, applicationName: string, applicationDescription: string,) { super(applicationId, applicationName, applicationDescription) }
+  constructor(applicationId: ApplicationId, applicationDescription: string, ctx:ISensactContext) { super(applicationId, applicationDescription, ctx) }
+
+  public UpdateState(state32bit:number){
+    this.ConfirmSuccessfulWrite();
+    this.inputElement.value!.checked=state32bit!=0;
+  }
 
   private oninput() {
     if (this.inputElement.value!.checked) {
-      //x.SendONCommand(this.applicationId, 0);
+      x.SendONCommand(this.applicationId, 0, this.ctx);
     } else {
-      //x.SendOFFCommand(this.applicationId, 0);
+      x.SendOFFCommand(this.applicationId, 0, this.ctx);
     }
     console.log(`onoff ${this.applicationId} ${this.inputElement.value!.checked}`);
   }
-
+/*
   export async function sendCommandMessage(id: ApplicationId, cmd: Command, payload: bigint) {
     console.log(`sendCommandMessage id=${id} cmd=${cmd}`)
     let b = new flatbuffers.Builder(1024);
@@ -181,6 +160,7 @@ export class OnOffApplication extends SensactApplication {
     );
     //let buf = b.asUint8Array();
 }
+    */
   protected CoreAppHtmlTemplate = () => html`
        <input ${ref(this.inputElement)} @input=${() => this.oninput()} class="toggle" type="checkbox"></input>`
 
@@ -196,10 +176,16 @@ Wenn diese Zeiten dann individuell erreicht werden, wird der passende Befehl an 
 */
 export class BlindsTimerApplication extends SensactApplication {
   private inputElement: Ref<HTMLInputElement> = createRef()
-  constructor(applicationId: ApplicationId, applicationKey: string, applicationDescription: string,) { super(applicationId, applicationKey, applicationDescription) }
+  constructor(applicationId: ApplicationId, applicationDescription: string, ctx:ISensactContext) { super(applicationId, applicationDescription, ctx) }
 
   protected CoreAppHtmlTemplate = () => html`
-       <input ${ref(this.inputElement)} @input=${() => this.oninput()} type="checkbox"></input>`
+       <input ${ref(this.inputElement)} @input=${() => this.oninput()} type="checkbox"></input>
+  `
+
+  public UpdateState(state32bit:number){
+    this.ConfirmSuccessfulWrite();
+    this.inputElement.value!.checked=state32bit!=0;
+  }
 
 
   private oninput() {
@@ -221,7 +207,13 @@ export class BlindApplication extends SensactApplication {
   private stopElement: Ref<HTMLInputElement> = createRef()
   private downElement: Ref<HTMLInputElement> = createRef()
 
-  constructor(applicationId: ApplicationId, applicationKey: string, applicationDescription: string,) { super(applicationId, applicationKey, applicationDescription) }
+  constructor(applicationId: ApplicationId, applicationDescription: string, ctx:ISensactContext,) { super(applicationId, applicationDescription, ctx) }
+
+  public UpdateState(state32bit:number){
+    this.ConfirmSuccessfulWrite();
+    var pos = (state32bit & 0xFF);
+    var move = (state32bit & 0xFF00)>>8;
+  }
 
   onStop() {
     //x.SendSTOPCommand(this.applicationId);
@@ -248,7 +240,7 @@ export class BlindApplication extends SensactApplication {
 export class SinglePwmApplication extends SensactApplication {
   private onOffElement: Ref<HTMLInputElement> = createRef()
   private sliderElement: Ref<HTMLInputElement> = createRef()
-  constructor(applicationId: ApplicationId, applicationKey: string, applicationDescription: string,) { super(applicationId, applicationKey, applicationDescription) }
+  constructor(applicationId: ApplicationId, applicationDescription: string, ctx:ISensactContext,) { super(applicationId, applicationDescription, ctx) }
   private oninput() {
     if (this.onOffElement.value!.checked) {
       //x.SendONCommand(this.applicationId, 0);
@@ -256,6 +248,15 @@ export class SinglePwmApplication extends SensactApplication {
       //x.SendOFFCommand(this.applicationId, 0);
     }
     console.log(`SinglePwmApplication ${this.applicationId} ${this.onOffElement.value!.checked}`);
+  }
+
+  public UpdateState(state32bit:number){
+    this.ConfirmSuccessfulWrite();
+    var brightness:number = (state32bit & 0xFF);
+    var on:boolean = (state32bit & 0xFF00)!=0;
+    if(brightness!=this.sliderElement.value!.valueAsNumber){
+      this.sliderElement.value!.valueAsNumber=brightness;
+    }
   }
 
   private onslide() {
@@ -266,6 +267,4 @@ export class SinglePwmApplication extends SensactApplication {
   <input ${ref(this.onOffElement)} @input=${() => this.oninput()} class="toggle" type="checkbox"></input>
   <input ${ref(this.sliderElement)} @input=${() => this.onslide()} type="range" min="1" max="100" value="50">
   `
-
-
 }

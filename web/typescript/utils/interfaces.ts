@@ -12,6 +12,10 @@ export interface IDialogBodyRenderer {
   Render(dialogBody: HTMLElement): HTMLInputElement | null;
 }
 
+export interface ISensactContext{
+  WrapAndFinishAndSend(b:flatbuffers.Builder, message_type:Requests,  message:flatbuffers.Offset, messagesToUnlock?: Array<Responses>, maxWaitingTimeMs?: number);
+}
+
 export interface IAppManagement {
   registerWebsocketMessageTypes(listener: IWebsocketMessageListener, ...messageTypes: number[]): (() => void);
   unregister(listener: IWebsocketMessageListener): void;

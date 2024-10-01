@@ -12,6 +12,9 @@ import { exampleSchedules, processScheduler_RequestScheduler } from "./screens/s
 import { createTimeseries } from "./screens/timeseries"
 import { RequestScheduler } from "./generated/flatbuffers/scheduler/request-scheduler";
 import { processRequestStoreFingerAction, processRequestStoreFingerSchedule, sendResponseEnrollNewFinger, sendResponseFingerprintSensorInfo, sendResponseFingers } from "./screens/fingerprint"
+import { BuildWebsensact, websensact_requestStatus } from "./screens/websensact"
+import { RequestStatus } from "./generated/flatbuffers/websensact"
+import { ISensactContext } from "./typescript/utils/interfaces"
 
 
 const PORT = 3000;
@@ -123,14 +126,13 @@ function sendResponseTimeseries(ws: WebSocket, req:RequestTimeseries) {
 
 function sendResponseSystemData(ws: WebSocket) {
     let b = new flatbuffers.Builder(1024);
-    let piOffset0 = PartitionInfo.createPartitionInfo(b, b.createString("Label0"), 0, 0x10, 3072, 1, true, b.createString("AppName"), b.createString("AppVersion"), b.createString("AppDate"), b.createString("AppTime"));
-    let piOffset1 = PartitionInfo.createPartitionInfo(b, b.createString("Label1"), 1, 0x01, 16384, 1, true, b.createString("AppName"), b.createString("AppVersion"), b.createString("AppDate"), b.createString("AppTime"));
-
-    let piVecOffset = ResponseSystemData.createPartitionsVector(b, [piOffset0, piOffset1]);
+    var partitionsOffset = new Array<number>();
+    partitionsOffset.push(PartitionInfo.createPartitionInfo(b, b.createString("Label0"), 0, 0x10, 3072, 1, true, b.createString("AppName"), b.createString("AppVersion"), b.createString("AppDate"), b.createString("AppTime")));
+    partitionsOffset.push(PartitionInfo.createPartitionInfo(b, b.createString("Label1"), 1, 0x01, 16384, 1, true, b.createString("AppName"), b.createString("AppVersion"), b.createString("AppDate"), b.createString("AppTime")));
     ResponseSystemData.startResponseSystemData(b);
     ResponseSystemData.addChipCores(b, 2);
     ResponseSystemData.addChipFeatures(b, 255);
-    ResponseSystemData.addPartitions(b, piVecOffset);
+    ResponseSystemData.addPartitions(b, ResponseSystemData.createPartitionsVector(b, partitionsOffset));
     ResponseSystemData.addChipModel(b, 2);
     ResponseSystemData.addChipRevision(b, 3);
     ResponseSystemData.addChipTemperature(b, 23.4);
@@ -190,10 +192,12 @@ function process(buffer: Buffer, ws: WebSocket) {
             break
         case Requests.RequestEnrollNewFinger:
             setTimeout(()=>sendResponseEnrollNewFinger(ws, <RequestEnrollNewFinger>mw.request(new RequestEnrollNewFinger())), 100);
-        
-            case Requests.scheduler_RequestScheduler:
+            break;
+        case Requests.scheduler_RequestScheduler:
             setTimeout(()=>processScheduler_RequestScheduler(ws, <RequestScheduler>mw.request(new RequestScheduler())), 100);
             break;
+        case Requests.websensact_RequestStatus:
+            setTimeout(()=>websensact_requestStatus(ws, <RequestStatus>mw.request(new RequestStatus())), 100);
         default:
             break;
     }
@@ -201,6 +205,12 @@ function process(buffer: Buffer, ws: WebSocket) {
 
 //let hostCert =fs.readFileSync("./../certificates/testserver.pem.crt").toString();
 //let hostPrivateKey = fs.readFileSync("./../certificates/testserver.pem.prvtkey").toString();
+
+class Foo implements ISensactContext{
+
+}
+
+BuildWebsensact();
 
 let server = http.createServer((req, res) => {
 //let server = https.createServer({key: hostPrivateKey, cert: hostCert}, (req, res) => {

@@ -2,17 +2,14 @@
 import * as flatbuffers from 'flatbuffers';
 import { ApplicationId } from '../../generated/flatbuffers/application-id';
 import { Command } from '../../generated/flatbuffers/command';
-import { CommandMessage } from '../../generated/flatbuffers/websensact/command-message';
+
+import { ISensactContext } from './interfaces';
+import { RequestCommand } from '../../generated/flatbuffers/websensact/request-command';
+import { Requests, Responses } from '../../generated/flatbuffers/webmanager';
 
 
-export async function sendCommandMessage(id: ApplicationId, cmd: Command, payload: Uint8Array) {
+export async function sendCommandMessage(id: ApplicationId, cmd: Command, payload: Uint8Array, ctx:ISensactContext) {
+    let view = new DataView(payload.buffer, 0);
     let b = new flatbuffers.Builder(1024);
-    let payloadOffset = CommandMessage.createPayloadVector(b, payload);
-    CommandMessage.startCommandMessage(b);
-    CommandMessage.addId(b, id);
-    CommandMessage.addCmd(b, cmd);
-    CommandMessage.addPayload(b, payloadOffset);
-    let x = CommandMessage.endCommandMessage(b);
-    b.finish(x);
-    //let buf = b.asUint8Array();
+    ctx.WrapAndFinishAndSend(b, Requests.websensact_RequestCommand, RequestCommand.createRequestCommand(b, id, cmd, view.getBigUint64(0, true)), [Responses.websensact_ResponseCommand], 3000);
 }

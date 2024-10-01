@@ -18,7 +18,7 @@ export default class{
                 new BooleanItem("G2I3 Bool", true, "G2_3_B"),
                 new EnumItem("G2I4 Enum", ["Hund", "Katze", "Maus", "Ente"], "G2_4_E"),
             ]),
-            new ConfigGroup("webmananger",[
+            new ConfigGroup("webmanager",[
                 new StringItem("ssid", "Woeste123", /.*/),
                 new StringItem("password", "wrong", /.*/),
             ])

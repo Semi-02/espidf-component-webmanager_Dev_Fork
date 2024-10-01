@@ -2,6 +2,7 @@ export {};
 declare global {
   interface Map<K, V> {
     getOrAdd(key: K, valueFactory: () => V): V;
+    
   }
 }
 Map.prototype.getOrAdd = function <K, V>(this: Map<K, V>, key: K, valueFactory: () => V): V {

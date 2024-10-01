@@ -25,6 +25,7 @@ export function fill_template_sendcommands(cb: gulp.TaskFunctionCallback) {
   }
   writeFileCreateDirLazy(path.join(P.GENERATED_SENSACT_TS, "sendCommandImplementation.ts"), content);
   writeFileCreateDirLazy(path.join(P.DEST_SENSACT_TYPESCRIPT_WEBUI, "sendCommandImplementation_copied_during_build.ts"), content);
+  writeFileCreateDirLazy(path.join(P.DEST_SENSACT_TYPESCRIPT_SERVER, "sendCommandImplementation_copied_during_build.ts"), content);
   cb();
 }
 
@@ -35,5 +36,6 @@ export function fill_template_sensactapps(cb: gulp.TaskFunctionCallback) {
   }
   writeFileCreateDirLazy(path.join(P.GENERATED_SENSACT_TS, "sensactapps.ts"), content);
   writeFileCreateDirLazy(path.join(P.DEST_SENSACT_TYPESCRIPT_WEBUI, "sensactapps_copied_during_build.ts"), content);
+  writeFileCreateDirLazy(path.join(P.DEST_SENSACT_TYPESCRIPT_SERVER, "sensactapps_copied_during_build.ts"), content);
   cb();
 }
