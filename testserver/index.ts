@@ -15,6 +15,28 @@ import { processRequestStoreFingerAction, processRequestStoreFingerSchedule, sen
 import { BuildWebsensact, websensact_requestStatus } from "./screens/websensact"
 import { RequestStatus } from "./generated/flatbuffers/websensact"
 import { ISensactContext } from "./typescript/utils/interfaces"
+/*
+    "terminal.integrated.env.windows": {
+        "NODE_OPTIONS":"--experimental-sqlite"
+    },
+*/
+/*
+const { DatabaseSync } = require('node:sqlite');
+
+const db = new DatabaseSync("./test.sqlite");
+db.exec(`
+    CREATE TABLE if not exists data(
+      key INTEGER PRIMARY KEY,
+      value TEXT
+    ) STRICT
+  `);
+
+const insert = db.prepare('INSERT INTO data (key, value) VALUES (?, ?)');
+insert.run(1, 'hello');
+insert.run(2, 'world');
+const query = db.prepare('SELECT * FROM data ORDER BY key');
+console.log(query.all());
+*/
 
 
 const PORT = 3000;

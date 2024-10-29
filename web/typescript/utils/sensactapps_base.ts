@@ -212,7 +212,7 @@ export class BlindApplication extends SensactApplication {
   public UpdateState(state32bit:number){
     this.ConfirmSuccessfulWrite();
     var pos = (state32bit & 0xFF);
-    var move = (state32bit & 0xFF00)>>8;
+    var dir = (state32bit & 0xFF00)>>8;
   }
 
   onStop() {

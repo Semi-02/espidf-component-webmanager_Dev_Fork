@@ -4,7 +4,7 @@ import BuildApps from "../generated/sensact/sensactapps_copied_during_build";
 import { SensactApplication } from "../typescript/utils/sensactapps_base";
 import { WrapAndFinishAndSend } from "../utils";
 import { Responses } from "../generated/flatbuffers/webmanager";
-import { RequestStatus, ResponseStatus, ResponseStatusItem } from "../generated/flatbuffers/websensact";
+import { RequestCommand, RequestStatus, ResponseCommand, ResponseStatus, ResponseStatusItem } from "../generated/flatbuffers/websensact";
 
 let sensactApps:Map<number, SensactApplication>;
 
@@ -30,4 +30,17 @@ export function websensact_requestStatus(ws: WebSocket, m: RequestStatus) {
         ResponseStatusItem.createResponseStatusItem(b,id,state);
     }
     WrapAndFinishAndSend(ws, b, Responses.websensact_ResponseStatus, ResponseStatus.createResponseStatus(b, b.endVector()));     
+}
+
+export function onRequestCommand(ws: WebSocket, m: RequestCommand){
+    
+
+
+    if(!sensactApps.has(m.id())){
+        console.warn(`onRequestCommand for id ${m.id()}: Id not found`);
+    }
+    var app = sensactApps.get(m.id())!;
+    app.onCommand(m.cmd(), m.payload());
+    let b = new flatbuffers.Builder(1024);
+    WrapAndFinishAndSend(ws, b, Responses.websensact_ResponseCommand, ResponseCommand.createResponseCommand(b));  
 }
