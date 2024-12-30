@@ -4,6 +4,10 @@ import { iWeeklyScheduleDialogHandler } from "../dialog_controller/weeklyschedul
 import type { Severity } from "./common";
 import * as flatbuffers from "flatbuffers"
 
+export interface IHtmlRenderer{
+  RenderStatic(c:HTMLElement):void;
+}
+
 export interface IWebsocketMessageListener {
   onMessage(messageWrapper: ResponseWrapper): void;
 }

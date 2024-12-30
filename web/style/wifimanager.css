@@ -1,0 +1,12 @@
+#wifi-list tr:hover {
+    background-color: #ccffff;
+    cursor: pointer;
+  }
+  
+  #wifi-list td:nth-child(1) {
+    width: 34px;
+  }
+  
+  #wifi-list td:nth-child(2) {
+    width: 34px;
+  }

@@ -1,0 +1,15 @@
+table.weekschedule {
+    border-collapse: collapse;
+    width:min-content;
+    tr{height: 0px; background-color: #ffffff;}
+    td:nth-child(8n+2){
+      background-color: #dddddd;
+    }
+    td:nth-child(8n+6){
+      background-color: #5b5555;
+    }
+    th, td { border: 1px solid black;}
+    td:nth-child(n+1){padding: 4px; cursor:copy; }
+    .selected { 
+      background-color: lightblue !important;}
+  }
