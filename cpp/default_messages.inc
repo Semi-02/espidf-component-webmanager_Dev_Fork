@@ -1,6 +1,0 @@
-        DEF(NONE, "Nothing has happened")
-        DEF(SW, "Reset Reason EXT/SW")
-        DEF(PANIC, "Reset Reason is PANIC")
-        DEF(BROWNOUT, "Reset Reason is BROWNOUT")
-        DEF(WATCHDOG, "Reset Reason is WATCHDOG")
-        DEF(SNTP, "Simple Network Time Protocol")

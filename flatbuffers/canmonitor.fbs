@@ -1,4 +1,8 @@
-namespace webmanager;
+namespace canmonitor;
+
+enum Namespace:uint32{
+    Value=6
+}
 
 struct CanData{
     data:[uint8:8];

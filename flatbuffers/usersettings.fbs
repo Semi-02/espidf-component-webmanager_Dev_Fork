@@ -1,6 +1,8 @@
-namespace webmanager;
+namespace usersettings;
 
-
+enum Namespace:uint32{
+    Value=10
+}
 
 table StringSetting{
     value:string;
@@ -26,24 +28,42 @@ union Setting{
 }
 
 table SettingWrapper{
-    settingKey:string;
+    setting_key:string;
     setting:Setting;
 }
 
 table RequestGetUserSettings{
-    groupKey:string;
+    group_key:string;
 }
 
 table ResponseGetUserSettings{
-    groupKey:string;
+    group_key:string;
     settings:[SettingWrapper];
 }
 
 table RequestSetUserSettings{
-    groupKey:string;
+    group_key:string;
     settings:[SettingWrapper];
 } 
 table ResponseSetUserSettings{
-    groupKey:string;
-    settingKeys:[string];
+    group_key:string;
+    setting_keys:[string];
+}
+
+union Requests{
+    RequestGetUserSettings,
+    RequestSetUserSettings, 
+}
+
+union Responses{
+    ResponseGetUserSettings,
+    ResponseSetUserSettings, 
+}
+
+table RequestWrapper{
+    request:Requests;
+}
+
+table ResponseWrapper{
+    response:Responses;
 }

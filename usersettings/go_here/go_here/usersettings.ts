@@ -1,5 +1,8 @@
 import { ConfigGroup, StringItem, IntegerItem, BooleanItem, EnumItem } from '../../typescript/utils/usersettings_base';
-
+//Hier legt der Nutzer die Einstellungen fest für das aktuelle Projekt
+//Die Datei liegt in dieser tiefen Verzeichnisebene, weil sie zum Kompilieren in verschiedene Projekte einkopiert wird
+//und dann dort der oben genannte import-Pfad für die Config-Items immer passen muss
+//Möglicherweise ist diese Datei natürlich auch bereits die "einkopierte" Datei...
 
 export default class{
     public static Build():ConfigGroup[]{
@@ -18,7 +21,7 @@ export default class{
                 new BooleanItem("G2I3 Bool", true, "G2_3_B"),
                 new EnumItem("G2I4 Enum", ["Hund", "Katze", "Maus", "Ente"], "G2_4_E"),
             ]),
-            new ConfigGroup("webmanager",[
+            new ConfigGroup("wifimanager",[
                 new StringItem("ssid", "Woeste123", /.*/),
                 new StringItem("password", "wrong", /.*/),
             ])

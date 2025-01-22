@@ -1,8 +1,12 @@
-namespace webmanager;
+namespace fingerprint;
+
+enum Namespace:uint32{
+    Value=7
+}
 
 table RequestFingerActionManually{
-    fingerIndex:uint16;
-    actionIndex:uint16;
+    finger_index:uint16;
+    action_index:uint16;
 }
 
 table ResponseFingerActionManually{
@@ -37,14 +41,14 @@ table ResponseDeleteFinger{
 }
 
 table RequestStoreFingerAction{
-    fingerIndex:uint16;
-    actionIndex:uint16;
+    finger_index:uint16;
+    action_index:uint16;
 }
 table ResponseStoreFingerAction{}
 
 table RequestStoreFingerSchedule{
-    fingerIndex:uint16;
-    scheduleName:string;
+    finger_index:uint16;
+    schedule_name:string;
 }
 table ResponseStoreFingerSchedule{}
 
@@ -73,15 +77,15 @@ struct Uint8x32{
 table RequestFingerprintSensorInfo{}
 table ResponseFingerprintSensorInfo{
     status:uint16; //Status register Contents of system status register 0 2
-    librarySizeMax:uint16;//System identifier code Fixed value: 0x0000 1 2
-    librarySizeUsed:uint16;
-    libraryUsedIndices:Uint8x32;
-    securityLevel:uint8;
-    deviceAddress:uint32;
-    dataPacketSizeCode:uint8;
-    baudRateTimes9600:uint8;
-    algVer:string;
-    fwVer:string;
+    library_size_max:uint16;//System identifier code Fixed value: 0x0000 1 2
+    library_size_used:uint16;
+    library_used_indices:Uint8x32;
+    security_level:uint8;
+    device_address:uint32;
+    data_packet_size_code:uint8;
+    baud_rate_times9600:uint8;
+    alg_ver:string;
+    fw_ver:string;
 }
 
 
@@ -90,16 +94,50 @@ table RequestFingers{}
 table Finger{
     name:string;
     index:uint16;
-    scheduleName:string;
-    actionIndex:uint16;
+    schedule_name:string;
+    action_index:uint16;
 }
 
 table ResponseFingers{
-    scheduleNames:[string];
+    schedule_names:[string];
     fingers:[Finger];
 }
 
 
 
+union Requests{
+    RequestFingers,
+    RequestFingerprintSensorInfo,
+    RequestRenameFinger,
+    RequestCancelInstruction,
+    RequestDeleteAllFingers,
+    RequestStoreFingerSchedule,
+    RequestStoreFingerAction,
+    RequestDeleteFinger,
+    RequestEnrollNewFinger,
+    RequestFingerActionManually,
+}
 
+union Responses{
+    ResponseFingerActionManually,
+    ResponseEnrollNewFinger,
+    NotifyEnrollNewFinger,
+    NotifyFingerDetected,
+    ResponseDeleteFinger,
+    ResponseStoreFingerAction,
+    ResponseStoreFingerSchedule,
+    ResponseDeleteAllFingers,
+    ResponseCancelInstruction,
+    ResponseRenameFinger,
+    ResponseFingerprintSensorInfo,
+    ResponseFingers,
+}
+
+table RequestWrapper{
+    request:Requests;
+}
+
+table ResponseWrapper{
+    response:Responses;
+}
 

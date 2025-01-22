@@ -1,13 +1,3 @@
-/*
-Konzept: 
-Beim Hochfahren nach Spannungswiederkehr 3 Wiederholungen, um als STA zu verbinden. Wenn das nicht funktioniert: AP aufmachen und möglichkeit zur Rekonfiguration geben
-Im Laufenden Betrieb: Unendliche Wiederholungen, um als STA zu verbinden. Ein Wechsel zum AP findet nie statt!
-also: Wenn erstmals eine Verbindung aufgebaut wurde, dann wird der remainingAttempsToConnectAsSTA auf INT_MAX / großen Wert gesetzt
-zur Semaphore: Diese scheint den Zugriff auf die mode-Variable zu sichern. Bitte alle Stellen prüfen und schauen ob an allen Stellen mit der Semaphore das gleiche Cariablen-Set betroffen ist
-
-zur Suche nach APs: Die Suche nach APs wird ausschließlich dann ausgeführt, wenn entweder keine STA-Konfig vorliegt oder die STA-Konfig gelöscht wurde
-oder natürlich wenn nach den o.g. 3 Wiederholungen keine Verbindung als STA möglich war
-*/
 #pragma once
 #include <sdkconfig.h>
 #include <cstring>
@@ -44,10 +34,6 @@ oder natürlich wenn nach den o.g. 3 Wiederholungen keine Verbindung als STA mö
 #include <common-esp32.hh>
 #include <esp_log.h>
 #include <sys/time.h>
-#include "../generated/flatbuffers_cpp/app_generated.h"
-#include "interfaces.hh"
-#include "user_settings.hh"
-
 #if (CONFIG_HTTPD_MAX_REQ_HDR_LEN<1024)
     #error CONFIG_HTTPD_MAX_REQ_HDR_LEN<1024 (Max HTTP Request Header Length)
 #endif
@@ -57,19 +43,39 @@ oder natürlich wenn nach den o.g. 3 Wiederholungen keine Verbindung als STA mö
 #ifndef CONFIG_HTTPD_WS_SUPPORT
  #error "Enable Websocket support for HTTPD in menuconfig"
 #endif
+#include "esp_vfs.h"
+#include "webmanager_constants.hh"
+#include "webmanager_interfaces.hh"
+#include "../generated/flatbuffers_cpp/wifimanager_generated.h"
 
 #define TAG "WMAN"
-#define WLOG(mc, md) webmanager::M::GetSingleton()->Log(mc, md)
-#include "webmanager_constants.hh"
-#include "webmanager_messagecodes.hh"
-#include "webmanager_utils.hh"
+
+
+
 namespace webmanager
 {
-    class M : public MessageSender
+    constexpr size_t HTTP_BUFFER_SIZE{2*2048};
+    constexpr size_t MAX_FILE_SIZE{256*1024};
+    /* Max length a file path can have on storage */
+    constexpr size_t FILE_PATH_MAX{ESP_VFS_PATH_MAX + CONFIG_SPIFFS_OBJ_NAME_LEN};
+
+    constexpr const char* FILES_BASE_PATH = "/files";
+
+    enum class WifiStationState
+    {
+
+        NO_CONNECTION,      //Zustand während der Initialisierung wenn noch unklar ist, was Sache ist
+                            //und auch, wenn keine brauchbaren Daten für einen Verbindungsaufbau vorliegen
+        SHOULD_CONNECT,   // Daten sind verfügbar, die passen könnten. Es soll beim nächsten Retry-Tick ein Verbindungsversuch gestartet werden. Gerade im Moment wurde aber noch kein Verbindungsversiuch gestartet. -->Scan möglich
+        ABOUT_TO_CONNECT, // es wurde gerade ein Verbindungsaufbau gestartet, es ist aber noch nicht klar, ob der erfolgreich war -->Scan nicht möglich
+        CONNECTED,
+    };
+
+    class M : public webmanager::iWebmanagerCallback
     {
     private:
         static M *singleton;
-        static __NOINIT_ATTR std::array<MessageLogEntry, STORAGE_LENGTH> messageLog;
+        uint8_t* http_buffer;
 
         char* hostname{nullptr};
 
@@ -88,18 +94,37 @@ namespace webmanager
         temperature_sensor_handle_t temp_handle{nullptr};
         httpd_handle_t http_server{nullptr};
         int websocket_file_descriptor{-1};
-        UserSettings* userSettings{nullptr};
         
         WifiStationState staState{WifiStationState::NO_CONNECTION};
         // bool accessPointIsActive{false}; // nein, diese Information kann über esp_wifi_get_mode() immer herausgefunden werden
-        int remainingAttempsToConnectAsSTA{ATTEMPTS_TO_RECONNECT};
+        uint32_t remainingAttempsToConnectAsSTA{ATTEMPTS_TO_RECONNECT_ON_STARTUP_BEFORE_OPENING_AN_ACCESS_POINT};
         bool initialScanIsActive{false};
         bool scanIsActive{false};
-        std::vector<iMessageReceiver*> *plugins{nullptr};
+        esp_ip4_addr_t ipAddr;
+        const char* ssid="-";
+        std::vector<iWebmanagerPlugin*> *plugins{nullptr};
 
+        class AsyncResponse{
+            public:
+            uint8_t* buffer;
+            size_t buffer_len;
         
+            AsyncResponse(uint32_t ns, flatbuffers::FlatBufferBuilder* b){
+                uint8_t* bp=b->GetBufferPointer();
+                buffer_len = b->GetSize();
+                buffer = new uint8_t[buffer_len+4];
+                ((uint32_t*)buffer)[0]=ns;
+                std::memcpy(buffer+4, bp, buffer_len);
+            }
 
-        M(){}
+            ~AsyncResponse(){
+                delete[] buffer;
+            }
+        };
+
+        M(){
+            http_buffer=new uint8_t[HTTP_BUFFER_SIZE];
+        }
 
         bool hasRealtime(){
             struct timeval tv_now;
@@ -144,7 +169,7 @@ namespace webmanager
             GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
             sz = sizeof(tmp_ssid);
             ret = nvs_get_str(handle, nvs_key_wifi_ssid, tmp_ssid, &sz);
-            if ((ret == ESP_OK || ret == ESP_ERR_NVS_NOT_FOUND) && strcmp((char *)tmp_ssid, (char *)wifi_config_sta.sta.ssid) != 0)
+            if ((ret == ESP_OK && strcmp((char *)tmp_ssid, (char *)wifi_config_sta.sta.ssid) != 0) || ret == ESP_ERR_NVS_NOT_FOUND)
             {
                 /* different ssid or ssid does not exist in flash: save new ssid */
                 GOTO_ERROR_ON_ERROR(nvs_set_str(handle, nvs_key_wifi_ssid, (const char *)wifi_config_sta.sta.ssid), "Unable to nvs_set_str(handle, \"ssid\", ssid_sta)");
@@ -154,7 +179,7 @@ namespace webmanager
 
             sz = sizeof(tmp_password);
             ret = nvs_get_str(handle, nvs_key_wifi_password, tmp_password, &sz);
-            if ((ret == ESP_OK || ret == ESP_ERR_NVS_NOT_FOUND) && strcmp((char *)tmp_password, (char *)wifi_config_sta.sta.password) != 0)
+            if ((ret == ESP_OK && strcmp((char *)tmp_password, (char *)wifi_config_sta.sta.password) != 0) || ret == ESP_ERR_NVS_NOT_FOUND)
             {
                 /* different password or password does not exist in flash: save new password */
                 GOTO_ERROR_ON_ERROR(nvs_set_str(handle, nvs_key_wifi_password, (const char *)wifi_config_sta.sta.password), "Unable to nvs_set_str(handle, \"password\", password_sta)");
@@ -184,7 +209,7 @@ namespace webmanager
             ret = nvs_get_str(handle, nvs_key_wifi_ssid, (char *)wifi_config_sta.sta.ssid, &sz);
             if (ret != ESP_OK)
             {
-                ESP_LOGI(TAG, "Unable to read ssid");
+                ESP_LOGI(TAG, "Unable to read Wifi SSID from NVS");
                 goto error;
             }
 
@@ -192,10 +217,10 @@ namespace webmanager
             ret = nvs_get_str(handle, nvs_key_wifi_password, (char *)wifi_config_sta.sta.password, &sz);
             if (ret != ESP_OK)
             {
-                ESP_LOGI(TAG, "Unable to read password");
+                ESP_LOGI(TAG, "Unable to read Wifi password from NVS");
                 goto error;
             }
-            ESP_LOGI(TAG, "wifi_manager_fetch_wifi_sta_config: ssid: %s password: %s", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
+            ESP_LOGI(TAG, "Successfully read Wifi credentials: ssid: %s password: %s", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
             ret = (wifi_config_sta.sta.ssid[0] == '\0') ? ESP_FAIL : ESP_OK;
         error:
             nvs_close(handle);
@@ -270,7 +295,7 @@ namespace webmanager
                     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
                     break;
                 case WifiStationState::CONNECTED:
-                    ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED, when STA_STATE::CONNECTED --> unexpected disconnection. Try to reconnect %d times.", remainingAttempsToConnectAsSTA);
+                    ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED, when STA_STATE::CONNECTED --> unexpected disconnection. Try to reconnect %lu times.", remainingAttempsToConnectAsSTA);
                     // Die Verbindung bestand zuvor und wurde jetzt getrennt. Versuche, erneut zu verbinden
                     staState = WifiStationState::SHOULD_CONNECT;
                     xTimerStart(wifi_manager_retry_timer, portMAX_DELAY);
@@ -288,13 +313,13 @@ namespace webmanager
                         esp_wifi_scan_start(nullptr/*for default config*/, false);
                         scanIsActive=true;
                         flatbuffers::FlatBufferBuilder b(256);
-                        auto res = CreateResponseWifiConnectFailedDirect(b, (char*)wifi_config_sta.sta.ssid);
-                        WrapAndFinishAndSendAsync(b, Responses::Responses_ResponseWifiConnectFailed, res.Union());
+                        b.Finish(wifimanager::CreateResponseWifiConnectDirect(b, false, (char*)wifi_config_sta.sta.ssid, 0,0,0));
+                        WrapAndSendAsync(wifimanager::Namespace::Namespace_Value, b);
                     }
                     else
                     {
-                        ESP_LOGD(TAG, "WIFI_EVENT_STA_DISCONNECTED, when STA_STATE::ABOUT_TO_CONNECT --> disconnection occured earlier and we tried to establish it again...which was not successful (Reason %d). Still %d attempt(s) to go.", wifi_event_sta_disconnected->reason, remainingAttempsToConnectAsSTA);
-                        ESP_LOGI(TAG, "Re-establishing connection failed (Reason %d). Still %d attempt(s) to go.", wifi_event_sta_disconnected->reason, remainingAttempsToConnectAsSTA);
+                        ESP_LOGD(TAG, "WIFI_EVENT_STA_DISCONNECTED, when STA_STATE::ABOUT_TO_CONNECT --> disconnection occured earlier and we tried to establish it again...which was not successful (Reason %d). Still %lu attempt(s) to go.", wifi_event_sta_disconnected->reason, remainingAttempsToConnectAsSTA);
+                        ESP_LOGI(TAG, "Re-establishing connection failed (Reason %d). Still %lu attempt(s) to go.", wifi_event_sta_disconnected->reason, remainingAttempsToConnectAsSTA);
                         staState = WifiStationState::SHOULD_CONNECT;
                         xTimerStart(wifi_manager_retry_timer, portMAX_DELAY);
                     }
@@ -309,7 +334,8 @@ namespace webmanager
             case WIFI_EVENT_STA_CONNECTED:{
                 wifi_event_sta_connected_t *wifi_event_sta_connected = (wifi_event_sta_connected_t *)event_data;
                 ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED --> Generally, a connection to the given AP is possible. Set remainingAttempsToConnectAsSTA to a high value");
-                remainingAttempsToConnectAsSTA = INT_MAX;
+                remainingAttempsToConnectAsSTA = ATTEMPTS_TO_RECONNECT_DURING_OPERATION_BEFORE_OPENING_AN_ACCESS_POINT;
+                this->ssid= (const char*)wifi_event_sta_connected->ssid;
                 break;
             }
             case WIFI_EVENT_AP_START:
@@ -357,6 +383,7 @@ namespace webmanager
             {
                 ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
                 ESP_LOGI(TAG, "Got IP from DHCP: ip=" IPSTR " netmask=" IPSTR " gw=" IPSTR " hostname=%s", IP2STR(&event->ip_info.ip), IP2STR(&event->ip_info.netmask), IP2STR(&event->ip_info.gw), hostname);
+                remainingAttempsToConnectAsSTA=ATTEMPTS_TO_RECONNECT_DURING_OPERATION_BEFORE_OPENING_AN_ACCESS_POINT;
                 staState = WifiStationState::CONNECTED;
                 update_sta_config_lazy();
                 xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
@@ -372,8 +399,9 @@ namespace webmanager
                     wifi_ap_record_t ap = {};
                     esp_wifi_sta_get_ap_info(&ap);
                     flatbuffers::FlatBufferBuilder b(256);
-                    auto res =  CreateResponseWifiConnectSuccessfulDirect(b, (char*)wifi_config_sta.sta.ssid, event->ip_info.ip.addr, event->ip_info.netmask.addr, event->ip_info.gw.addr);
-                    WrapAndFinishAndSendAsync(b, Responses::Responses_ResponseWifiConnectSuccessful, res.Union());
+                    b.Finish(wifimanager::CreateResponseWifiConnectDirect(b, true, (char*)wifi_config_sta.sta.ssid, event->ip_info.ip.addr, event->ip_info.netmask.addr, event->ip_info.gw.addr));
+                    this->ipAddr=event->ip_info.ip;
+                    WrapAndSendAsync(wifimanager::Namespace::Namespace_Value, b);
                 }
                 break;
             }
@@ -385,7 +413,7 @@ namespace webmanager
              * know that the IPV4 address is lost. */
             case IP_EVENT_STA_LOST_IP:
             {
-                ESP_LOGI(TAG, "IP_EVENT_STA_LOST_IP");
+                ESP_LOGD(TAG, "IP_EVENT_STA_LOST_IP");
                 break;
             }
             }
@@ -399,7 +427,8 @@ namespace webmanager
             localtime_r(&now, &timeinfo);
             strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
             ESP_LOGI(TAG, "Notification of a time synchronization. The current date/time in Berlin is: %s", strftime_buf);
-            LogJournal(messagecodes::C::SNTP, esp_timer_get_time() / 1000);
+            for(const auto& p : *this->plugins){p->OnTimeUpdate(this);}
+            //LogJournal(messagecodes::C::SNTP, esp_timer_get_time() / 1000);
         }
 
         static void ws_async_send(void *arg)
@@ -417,27 +446,6 @@ namespace webmanager
                 //should be syncronous. So the buffer can be deleted, when the function returns
             }
             delete a;
-        }
-        
-        static int logging_vprintf(const char *fmt, va_list l)
-        {
-            char* buffer{nullptr};      
-            size_t buffer_len=vasprintf(&buffer, fmt, l);
-            if(buffer_len==0){
-                printf("buffer_len==0\n");
-                free(buffer);
-                return buffer_len;
-            }    
-            printf(buffer);
-            free(buffer);
-            return buffer_len;
-            //TODO: system crashes without message after connection to access point
-            M* myself = M::GetSingleton();
-            flatbuffers::FlatBufferBuilder b(256);
-            auto res = CreateNotifyLiveLogItemDirect(b, buffer);
-            myself->WrapAndFinishAndSendAsync(b, Responses::Responses_NotifyLiveLogItem, res.Union());
-            free(buffer);
-            return buffer_len;
         }
 
         esp_err_t handle_webmanager_ws(httpd_req_t *req)
@@ -470,59 +478,47 @@ namespace webmanager
                 delete[] buf;
                 return ret;
             }
-            auto mw = flatbuffers::GetRoot<RequestWrapper>(buf);
-            webmanager::Requests reqType=mw->request_type();
-            ESP_LOGI(TAG, "Received websocket frame: len=%d, requestType=%d ", (int)ws_pkt.len, reqType);
-            switch (reqType)
-            {
-            case webmanager::Requests::Requests_RequestSystemData:
-                sendResponseSystemData(req, &ws_pkt);
-                break;
-            case webmanager::Requests::Requests_RequestJournal:
-                sendResponseJournal(req, &ws_pkt);
-                break;
-            case webmanager::Requests::Requests_RequestNetworkInformation:
-                sendResponseNetworkInformation(req, &ws_pkt, mw->request_as_RequestNetworkInformation());
-                break;
-            case webmanager::Requests::Requests_RequestRestart:
-                esp_restart();
-                break;
-            case webmanager::Requests::Requests_RequestWifiConnect:
-                handleRequestWifiConnect(req, &ws_pkt, mw->request_as_RequestWifiConnect());
-                break;
-            case webmanager::Requests::Requests_RequestWifiDisconnect:
-                handleRequestWifiDisconnect(req, &ws_pkt, mw->request_as_RequestWifiDisconnect());
-                break;
-            case webmanager::Requests::Requests_RequestGetUserSettings:
-                this->userSettings->handleRequestGetUserSettings(req, &ws_pkt, mw->request_as_RequestGetUserSettings());
-                break;
-            case webmanager::Requests::Requests_RequestSetUserSettings:
-                this->userSettings->handleRequestSetUserSettings(req, &ws_pkt, mw->request_as_RequestSetUserSettings());
-                break;
-            default:{
+            uint32_t ns = *((uint32_t*)buf);
+            uint8_t* fb_buf=buf+4;
+            if(ns==wifimanager::Namespace::Namespace_Value){
+                auto rw = flatbuffers::GetRoot<wifimanager::RequestWrapper>(fb_buf);
+                wifimanager::Requests reqType=rw->request_type();
+                ESP_LOGI(TAG, "Received websocket frame: len=%d, requestType=%d ", (int)ws_pkt.len, reqType);
+                switch (reqType){
+                case wifimanager::Requests::Requests_RequestNetworkInformation:
+                    sendResponseNetworkInformation(req, &ws_pkt, rw->request_as_RequestNetworkInformation());
+                    break;
+                
+                case wifimanager::Requests::Requests_RequestWifiConnect:
+                    handleRequestWifiConnect(req, &ws_pkt, rw->request_as_RequestWifiConnect());
+                    break;
+                case wifimanager::Requests::Requests_RequestWifiDisconnect:
+                    handleRequestWifiDisconnect(req, &ws_pkt, rw->request_as_RequestWifiDisconnect());
+                    break;
+                default:                
+                    break;
+                }
+            }else{
                 eMessageReceiverResult success{eMessageReceiverResult::NOT_FOR_ME};
                 if(plugins){
-                    for(auto mr:*plugins){
-                        success=mr->provideWebsocketMessage(this, req, &ws_pkt, mw);
+                    for(auto p:*plugins){
+                        success=p->ProvideWebsocketMessage(this, req, &ws_pkt, ns, fb_buf);
                         if(success!=eMessageReceiverResult::NOT_FOR_ME){
                             break;
                         }
                     }
                 }
                 if(success==eMessageReceiverResult::NOT_FOR_ME){
-                    ESP_LOGW(TAG, "Not yet implemented request %d, neither internal nor in a plugin", (int)mw->request_type());
+                    ESP_LOGW(TAG, "Not yet implemented request for namespace %lu, neither internal nor in a plugin", ns);
                 }else if(success==eMessageReceiverResult::FOR_ME_BUT_FAILED){
-                    ESP_LOGW(TAG, "Request %d has been implemented by plugin, but processing failed", (int)mw->request_type());
+                    ESP_LOGW(TAG, "Request for namespace %lu has been implemented by plugin, but processing failed", ns);
                 }
-            }
-                
-                break;
             }
             delete[] buf;
             return ESP_OK;
         }
-
-        esp_err_t handleRequestWifiConnect(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const webmanager::RequestWifiConnect *wifiConnect){
+        
+        esp_err_t handleRequestWifiConnect(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const wifimanager::RequestWifiConnect *wifiConnect){
              
             esp_err_t ret{ESP_OK};//necessary for ESP_GOTO_ON_FALSE
             const char* ssid = wifiConnect->ssid()->c_str();
@@ -540,16 +536,16 @@ namespace webmanager
             return ret;
         negativeresponse:
             flatbuffers::FlatBufferBuilder b(256);
-            auto res =  CreateResponseWifiConnectFailedDirect(b, (char*)wifi_config_sta.sta.ssid);
-            return WrapAndFinishAndSendAsync(b, Responses::Responses_ResponseWifiConnectFailed, res.Union());
+            b.Finish(wifimanager::CreateResponseWifiConnectDirect(b, false, (char*)wifi_config_sta.sta.ssid, 0,0,0,0));
+            return WrapAndSendAsync(wifimanager::Namespace::Namespace_Value,  b);
         }
 
-        esp_err_t handleRequestWifiDisconnect(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const webmanager::RequestWifiDisconnect *wifiDisconnect){
+        esp_err_t handleRequestWifiDisconnect(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const wifimanager::RequestWifiDisconnect *wifiDisconnect){
             flatbuffers::FlatBufferBuilder b(256);
-            auto res =  CreateResponseWifiDisconnect(b);
-            auto mwresp= CreateResponseWrapper(b, Responses::Responses_ResponseWifiDisconnect, res.Union());
+            auto res =  wifimanager::CreateResponseWifiDisconnect(b);
+            auto mwresp= wifimanager::CreateResponseWrapper(b, wifimanager::Responses::Responses_ResponseWifiDisconnect, res.Union());
             b.Finish(mwresp);
-            AsyncResponse *a = new AsyncResponse(&b);
+            AsyncResponse *a = new AsyncResponse(wifimanager::Namespace::Namespace_Value, &b);
             if(httpd_queue_work(http_server, M::ws_async_send, a)!=ESP_OK){delete(a);}
             vTaskDelay(pdMS_TO_TICKS(2000)); // warte 200ms, um die Beantwortung des Requests noch zu ermöglichen
             xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
@@ -562,8 +558,8 @@ namespace webmanager
         
         }
 
-        esp_err_t sendResponseNetworkInformation(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const webmanager::RequestNetworkInformation  *netInfo){
-            bool forceUpdate = netInfo->forceNewSearch();
+        esp_err_t sendResponseNetworkInformation(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const wifimanager::RequestNetworkInformation  *netInfo){
+            bool forceUpdate = netInfo->force_new_search();
             ESP_LOGI(TAG, "Prepare to send ResponseWifiAccesspoints");
             esp_err_t forcedScanResult{ESP_OK};
             if(!initialScanIsActive && !scanIsActive && forceUpdate){
@@ -573,18 +569,18 @@ namespace webmanager
             }
             xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
             flatbuffers::FlatBufferBuilder b(1024);
-            std::vector<flatbuffers::Offset<AccessPoint>> ap_vector;
+            std::vector<flatbuffers::Offset<wifimanager::AccessPoint>> ap_vector;
             if(forceUpdate && forcedScanResult!=ESP_OK){
-                ap_vector.push_back(CreateAccessPoint(b, b.CreateString("Error while forced scanning"), forcedScanResult, 0, 0));
+                ap_vector.push_back(wifimanager::CreateAccessPoint(b, b.CreateString("Error while forced scanning"), forcedScanResult, 0, 0));
             }
             else if(initialScanIsActive){
-                ap_vector.push_back(CreateAccessPoint(b, b.CreateString("Initial Scan was still active. Refresh page in a few seconds!"), 0, 0, 0));
+                ap_vector.push_back(wifimanager::CreateAccessPoint(b, b.CreateString("Initial Scan was still active. Refresh page in a few seconds!"), 0, 0, 0));
             
             }else{
                 for (size_t i = 0; i < accessp_records_len; i++)
                 {
                     wifi_ap_record_t* ap = accessp_records+i;
-                    ap_vector.push_back(CreateAccessPoint(b, b.CreateString((char*)ap->ssid), ap->primary, ap->rssi, ap->authmode));
+                    ap_vector.push_back(wifimanager::CreateAccessPoint(b, b.CreateString((char*)ap->ssid), ap->primary, ap->rssi, ap->authmode));
                 }
             }
             esp_netif_ip_info_t ap_ip_info = {};
@@ -594,7 +590,7 @@ namespace webmanager
             wifi_ap_record_t ap={};
             esp_wifi_sta_get_ap_info(&ap);
             xSemaphoreGive(webmanager_semaphore);
-            auto res = CreateResponseNetworkInformationDirect(b, 
+            b.Finish(wifimanager::CreateResponseNetworkInformationDirect(b, 
                 hostname, 
                 (char*)wifi_config_ap.ap.ssid,
                 (char*)wifi_config_ap.ap.password,
@@ -605,83 +601,10 @@ namespace webmanager
                 sta_ip_info.netmask.addr,
                 sta_ip_info.gw.addr,
                 ap.rssi,
-                &ap_vector);
-            return WrapAndFinishAndSendAsync(b, Responses::Responses_ResponseNetworkInformation, res.Union());
+                &ap_vector));
+            return WrapAndSendAsync(wifimanager::Namespace::Namespace_Value, b);
         }
         
-        esp_err_t sendResponseJournal(httpd_req_t *req, httpd_ws_frame_t *ws_pkt)
-        {
-            ESP_LOGI(TAG, "Prepare to send ResponseJournal");
-            flatbuffers::FlatBufferBuilder b(1024);
-            
-            std::vector<flatbuffers::Offset<JournalItem>> item_vector;
-            xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
-            //std::sort(BUFFER.rbegin(), BUFFER.rend());
-            for (int i = 0; i < messageLog.size(); i++)
-            {
-                if (messageLog[i].messageCode == 0)
-                    continue;
-                auto itemOffset=CreateJournalItemDirect(b, messageLog[i].lastMessageTimestamp, messageLog[i].messageCode, messagecodes::N[messageLog[i].messageCode], messageLog[i].lastMessageData, messageLog[i].messageCount);
-                item_vector.push_back(itemOffset);
-            }
-            xSemaphoreGive(webmanager_semaphore);
-            auto rjOffset =  CreateResponseJournal(b, b.CreateVector(item_vector));
-
-            return WrapAndFinishAndSendAsync(b, Responses::Responses_ResponseJournal, rjOffset.Union());
-        }
-
-        esp_err_t sendResponseSystemData(httpd_req_t *req, httpd_ws_frame_t *ws_pkt)
-        {
-            ESP_LOGI(TAG, "Prepare to send ResponseSystemData");
-            flatbuffers::FlatBufferBuilder b(1024);
-            const esp_partition_t *running = esp_ota_get_running_partition();
-            esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, nullptr);
-            std::vector<flatbuffers::Offset<PartitionInfo>> partitions_vector;
-            while (it)
-            {
-                const esp_partition_t *p = esp_partition_get(it);
-                esp_ota_img_states_t ota_state;
-                esp_ota_get_state_partition(p, &ota_state);
-                esp_app_desc_t app_info = {};
-                esp_ota_get_partition_description(p, &app_info);
-                if(app_info.project_name[0]==0xFF){
-                    partitions_vector.push_back(CreatePartitionInfoDirect(b, p->label, (uint8_t)p->type, (uint8_t)p->subtype, p->size, (uint8_t)ota_state, p == running, "", "", "", ""));
-                }else{
-                    partitions_vector.push_back(CreatePartitionInfoDirect(b, p->label, (uint8_t)p->type, (uint8_t)p->subtype, p->size, (uint8_t)ota_state, p == running, app_info.project_name, app_info.version, app_info.date, app_info.time));
-                }
-                it = esp_partition_next(it);
-            }
-
-            esp_chip_info_t chip_info = {};
-            esp_chip_info(&chip_info);
-            struct timeval tv_now;
-            gettimeofday(&tv_now, nullptr);
-
-            float tsens_out{0.0};
-            //ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_handle, &tsens_out));
-            uint8_t mac_buffer[6];
-            esp_read_mac(mac_buffer, ESP_MAC_BT);
-            auto bt = webmanager::Mac6(mac_buffer);
-            esp_read_mac(mac_buffer, ESP_MAC_ETH);
-            auto eth = webmanager::Mac6(mac_buffer);
-#if CONFIG_SOC_IEEE802154_SUPPORTED
-            esp_read_mac(mac_buffer, ESP_MAC_IEEE802154);
-#else
-            for(int i=0;i<6;i++)mac_buffer[i]=0;
-#endif
-            auto ieee = webmanager::Mac6(mac_buffer);
-            esp_read_mac(mac_buffer, ESP_MAC_WIFI_SOFTAP);
-            auto softap = webmanager::Mac6(mac_buffer);
-            esp_read_mac(mac_buffer, ESP_MAC_WIFI_STA);
-            auto sta = webmanager::Mac6(mac_buffer);
-            auto rsd =CreateResponseSystemDataDirect(
-                b,
-                tv_now.tv_sec, esp_timer_get_time()/1000000, esp_get_free_heap_size(), &sta, &softap, &bt, &eth, &ieee,
-                (uint32_t)chip_info.model, chip_info.features, chip_info.revision, chip_info.cores, tsens_out, &partitions_vector
-            );
-            return WrapAndFinishAndSendAsync(b, Responses::Responses_ResponseSystemData, rsd.Union());
-        }
-
         esp_err_t handle_ota_post(httpd_req_t *req)
         {
             ESP_LOGI(TAG, "in handle_ota_post");
@@ -694,7 +617,7 @@ namespace webmanager
 
             while (remaining > 0)
             {
-                int recv_len = httpd_req_recv(req, buf, std::min(remaining, sizeof(buf)));
+                int recv_len = httpd_req_recv(req, buf, std::min(remaining, (size_t)sizeof(buf)));
                 if (recv_len <= 0)
                 {
                     // Serious Error: Abort OTA
@@ -731,6 +654,233 @@ namespace webmanager
             return ESP_OK;
         }
 
+        /* Send HTTP response with a run-time generated html consisting of
+        * a list of all files and folders under the requested path.
+        * In case of SPIFFS this returns empty list when path is any
+        * string other than '/', since SPIFFS doesn't support directories */
+        esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
+        {
+            struct dirent *entry;
+            DIR *dir = opendir(dirpath);
+            if (!dir) {
+                ESP_LOGE(TAG, "Failed to stat dir : %s", dirpath);
+                httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Directory does not exist");
+                return ESP_FAIL;
+            }
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr_chunk(req, "{'files':[");
+            while ((entry = readdir(dir)) != nullptr) {
+                if(entry->d_type == DT_DIR) continue;
+                httpd_resp_sendstr_chunk(req, "'");
+                httpd_resp_sendstr_chunk(req, entry->d_name);
+                httpd_resp_sendstr_chunk(req, "',");
+            }
+            closedir(dir);
+            dir = opendir(dirpath);
+            
+            httpd_resp_sendstr_chunk(req, "], 'dirs':[");
+            while ((entry = readdir(dir)) != nullptr) {
+                if(entry->d_type != DT_DIR) continue;
+                httpd_resp_sendstr_chunk(req, "'");
+                httpd_resp_sendstr_chunk(req, entry->d_name);
+                httpd_resp_sendstr_chunk(req, "',");
+            }
+            closedir(dir);
+            httpd_resp_sendstr_chunk(req, "]}");
+            httpd_resp_sendstr_chunk(req, NULL);
+            return ESP_OK;
+        }
+
+        const char* get_path_from_uri(char *dest, const char *base_path, const char *uri, size_t destsize)
+        {
+            const size_t base_pathlen = strlen(base_path);
+            size_t pathlen = strlen(uri);
+
+            const char *quest = strchr(uri, '?');
+            if (quest) {
+                pathlen = std::min((int)pathlen, (int)(quest - uri));
+            }
+            const char *hash = strchr(uri, '#');
+            if (hash) {
+                pathlen = std::min((int)pathlen, (int)(hash - uri));
+            }
+
+            if (base_pathlen + pathlen + 1 > destsize) {
+                /* Full path string won't fit into destination buffer */
+                return nullptr;
+            }
+
+            /* Construct full path (base + path) */
+            strcpy(dest, base_path);
+            strlcpy(dest + base_pathlen, uri, pathlen + 1);
+
+            /* Return pointer to path, skipping the base */
+            return dest + base_pathlen;
+        }
+        
+
+        esp_err_t handle_files_get(httpd_req_t *req)
+        {
+            char filepath[FILE_PATH_MAX];
+            FILE *fd = nullptr;
+            struct stat file_stat;
+
+            const char *filename = get_path_from_uri(filepath, FILES_BASE_PATH, req->uri, sizeof(filepath));
+            if (!filename) {
+                ESP_LOGE(TAG, "Filename is too long");
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
+                return ESP_FAIL;
+            }
+
+            /* If name has trailing '/', respond with directory contents */
+            if (filename[strlen(filename) - 1] == '/') {
+                return http_resp_dir_html(req, filepath);
+            }
+
+            if (stat(filepath, &file_stat) == -1) {
+                httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
+                return ESP_FAIL;
+            }
+
+            fd = fopen(filepath, "r");
+            if (!fd) {
+                ESP_LOGE(TAG, "Failed to read existing file : %s", filepath);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read existing file");
+                return ESP_FAIL;
+            }
+
+            ESP_LOGI(TAG, "Sending file : %s (%ld bytes)...", filename, file_stat.st_size);
+
+            size_t chunksize;
+            do {
+                /* Read file in chunks into the scratch buffer */
+                chunksize = fread(http_buffer, 1, HTTP_BUFFER_SIZE, fd);
+
+                if (chunksize > 0) {
+                    if (httpd_resp_send_chunk(req, (const char*)http_buffer, chunksize) != ESP_OK) {
+                        fclose(fd);
+                        ESP_LOGE(TAG, "File sending failed!");
+                        httpd_resp_sendstr_chunk(req, nullptr);
+                        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
+                        return ESP_FAIL;
+                    }
+                }
+            } while (chunksize != 0);
+
+            fclose(fd);
+            httpd_resp_send_chunk(req, nullptr, 0);
+            return ESP_OK;
+        }
+
+        esp_err_t handle_files_post(httpd_req_t *req)
+        {
+            char filepath[FILE_PATH_MAX];
+            FILE *fd = NULL;
+            struct stat file_stat;
+
+   
+            const char *filename = get_path_from_uri(filepath, FILES_BASE_PATH, req->uri, sizeof(filepath));
+            if (!filename) {
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
+                return ESP_FAIL;
+            }
+
+
+            if (filename[strlen(filename) - 1] == '/') {
+                ESP_LOGE(TAG, "Invalid filename : %s", filename);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid filename");
+                return ESP_FAIL;
+            }
+
+            if (stat(filepath, &file_stat) == 0) {
+                ESP_LOGE(TAG, "File already exists : %s", filepath);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File already exists");
+                return ESP_FAIL;
+            }
+
+
+            if (req->content_len > MAX_FILE_SIZE) {
+                ESP_LOGE(TAG, "File too large : %d bytes", req->content_len);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File too large");
+                return ESP_FAIL;
+            }
+
+            fd = fopen(filepath, "w");
+            if (!fd) {
+                ESP_LOGE(TAG, "Failed to create file : %s", filepath);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create file");
+                return ESP_FAIL;
+            }
+
+            ESP_LOGI(TAG, "Receiving file : %s...", filename);
+            size_t received;
+            size_t remaining = req->content_len;
+
+            while (remaining > 0) {
+
+                ESP_LOGI(TAG, "Remaining size : %d", remaining);
+                /* Receive the file part by part into a buffer */
+                if ((received = httpd_req_recv(req, (char*)http_buffer, std::min(remaining, HTTP_BUFFER_SIZE))) <= 0) {
+                    if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+                    /* In case of unrecoverable error,
+                    * close and delete the unfinished file*/
+                    fclose(fd);
+                    unlink(filepath);
+                    ESP_LOGE(TAG, "File reception failed!");
+                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive file");
+                    return ESP_FAIL;
+                }
+
+                /* Write buffer content to file on storage */
+                if (received && (received != fwrite(http_buffer, 1, received, fd))) {
+                    /* Couldn't write everything to file!
+                    * Storage may be full? */
+                    fclose(fd);
+                    unlink(filepath);
+
+                    ESP_LOGE(TAG, "File write failed!");
+                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to write file to storage");
+                    return ESP_FAIL;
+                }
+                remaining -= received;
+            }
+
+
+            fclose(fd);
+            ESP_LOGI(TAG, "File reception complete");
+            httpd_resp_sendstr(req, "File uploaded successfully");
+            return ESP_OK;
+        }
+
+        esp_err_t handle_files_delete(httpd_req_t *req)
+        {
+            char filepath[FILE_PATH_MAX];
+            struct stat file_stat;
+            const char *filename = get_path_from_uri(filepath, FILES_BASE_PATH, req->uri, sizeof(filepath));
+            if (!filename) {
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
+                return ESP_FAIL;
+            }
+
+            /* Filename cannot have a trailing '/' */
+            if (filename[strlen(filename) - 1] == '/') {
+                ESP_LOGE(TAG, "Invalid filename : %s", filename);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid filename");
+                return ESP_FAIL;
+            }
+
+            if (stat(filepath, &file_stat) == -1) {
+                ESP_LOGE(TAG, "File does not exist : %s", filename);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File does not exist");
+                return ESP_FAIL;
+            }
+
+            ESP_LOGI(TAG, "Deleting file : %s", filename);
+            unlink(filepath);
+            httpd_resp_sendstr(req, "File deleted successfully");
+            return ESP_OK;
+        }
+
     public:
         static M *GetSingleton()
         {
@@ -748,38 +898,63 @@ namespace webmanager
         const char* GetHostname(){
             return this->hostname;
         }
-
-        UserSettings* GetUserSettings(){
-            return this->userSettings;
-        }
-        
-        esp_err_t WrapAndFinishAndSendAsync(::flatbuffers::FlatBufferBuilder &b, webmanager::Responses message_type = webmanager::Responses_NONE, ::flatbuffers::Offset<void> message = 0){
-            b.Finish(CreateResponseWrapper(b, message_type, message));
-            auto *a = new AsyncResponse(&b);
-            if(httpd_queue_work(http_server, M::ws_async_send, a)!=ESP_OK){delete(a);}
-             return ESP_OK;
+ 
+        esp_ip4_addr_t GetIpAddress(){
+            return this->ipAddr;
         }
 
-        int logging_printf(const char * format, ... ){
-            va_list a_list;
-            va_start( a_list, format );
-            int val =M::logging_vprintf(format, a_list);
-            va_end (a_list);
-            return val;
+        const char* GetSsid(){
+            return this->ssid;
         }
 
-        void SetPlugins(std::vector<iMessageReceiver*> *plugins){
-            this->plugins=plugins;
-        }
-        
-        void RegisterHTTPDHandlers(httpd_handle_t httpd_handle, const char* webmanager_uri_prefix="/*")
+        esp_err_t WrapAndSendAsync(uint32_t ns, ::flatbuffers::FlatBufferBuilder &b)override
         {
-            httpd_uri_t ota_post = {"/ota", HTTP_POST, [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_ota_post(req);}, this, false, false, nullptr};
+            auto *a = new AsyncResponse(ns, &b);
+            if(httpd_queue_work(http_server, M::ws_async_send, a)!=ESP_OK){delete(a);}
+            return ESP_OK;
+        }
+
+        void RegisterHTTPDHandlers(httpd_handle_t httpd_handle)
+        {
+            httpd_uri_t files_get = {
+                FILES_BASE_PATH, 
+                HTTP_GET, 
+                [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_files_get(req);}, 
+                this, false, false, nullptr
+            };
+            ESP_ERROR_CHECK(httpd_register_uri_handler(httpd_handle, &files_get));
+
+            httpd_uri_t files_post = {
+                FILES_BASE_PATH, 
+                HTTP_POST, 
+                [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_files_post(req);}, 
+                this, false, false, nullptr
+            };
+            ESP_ERROR_CHECK(httpd_register_uri_handler(httpd_handle, &files_post));
+
+            httpd_uri_t files_delete = {
+                FILES_BASE_PATH, 
+                HTTP_DELETE, 
+                [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_files_delete(req);}, 
+                this, false, false, nullptr
+            };
+            ESP_ERROR_CHECK(httpd_register_uri_handler(httpd_handle, &files_delete));
+            
+            httpd_uri_t ota_post = {
+                "/ota", 
+                HTTP_POST, 
+                [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_ota_post(req);}, 
+                this, false, false, nullptr
+            };
             ESP_ERROR_CHECK(httpd_register_uri_handler(httpd_handle, &ota_post));
-            httpd_uri_t webmanager_ws = {"/webmanager_ws", HTTP_GET, [](httpd_req_t *req){return static_cast<webmanager::M *>(req->user_ctx)->handle_webmanager_ws(req);}, this, true, false, nullptr};
+            httpd_uri_t webmanager_ws = {
+                "/webmanager_ws",
+                HTTP_GET, 
+                [](httpd_req_t *req){return static_cast<webmanager::M *>(req->user_ctx)->handle_webmanager_ws(req);}, this, true, false, nullptr
+            };
             ESP_ERROR_CHECK(httpd_register_uri_handler(httpd_handle, &webmanager_ws));
             httpd_uri_t webmanager_get = {
-                webmanager_uri_prefix, HTTP_GET, 
+                "/*", HTTP_GET, 
                 [](httpd_req_t *req)
                 {
                     httpd_resp_set_type(req, "text/html");
@@ -793,17 +968,18 @@ namespace webmanager
             this->http_server=httpd_handle;
         }
 
-        esp_err_t Begin(const char *accessPointSsidPattern, const char *accessPointPassword, const char *hostnamePattern, bool resetStoredWifiConnection, bool init_netif_and_create_event_loop = true)
+        esp_err_t Begin(const char *accessPointSsidPattern, const char *accessPointPassword, const char *hostnamePattern, bool resetStoredWifiConnection, std::vector<iWebmanagerPlugin*>* plugins, bool init_netif_and_create_event_loop = true)
         {
+            ESP_LOGI(TAG, "Stating Webmanager");
             if (strlen(accessPointPassword) < 8 && AP_AUTHMODE != WIFI_AUTH_OPEN)
             {
-                ESP_LOGE(TAG, "Password too short for authentication. Minimal length is 8.");
+                ESP_LOGE(TAG, "Password too short for authentication. Minimal length is 8. Exiting Webmanager");
                 return ESP_FAIL;
             }
 
             if (webmanager_semaphore != nullptr)
             {
-                ESP_LOGE(TAG, "webmanager already started");
+                ESP_LOGE(TAG, "webmanager already started. Exiting webmanager");
                 return ESP_FAIL;
             }
             webmanager_semaphore = xSemaphoreCreateBinary();
@@ -815,40 +991,7 @@ namespace webmanager
                 ESP_ERROR_CHECK(esp_event_loop_create_default());
             }
 
-            switch (auto reason = esp_reset_reason())
-            {
-            case ESP_RST_POWERON:
-                ESP_LOGI(TAG, "Reset Reason is RESET %d. MessageLog Memory is reset", reason);
-                messageLog.fill({0, 0, 0, 0});
-                break;
-            case ESP_RST_EXT:
-            case ESP_RST_SW:
-                ESP_LOGI(TAG, "Reset Reason is EXT/SW %d. MessageLogEntry is added", reason);
-                this->LogJournal(messagecodes::C::SW, reason);
-                break;
-            case ESP_RST_PANIC:
-                ESP_LOGI(TAG, "Reset Reason is PANIC %d. MessageLogEntry is added", reason);
-                this->LogJournal(messagecodes::C::PANIC, reason);
-                break;
-            case ESP_RST_BROWNOUT:
-                ESP_LOGI(TAG, "Reset Reason is BROWNOUT %d. MessageLogEntry is added", reason);
-                this->LogJournal(messagecodes::C::BROWNOUT, reason);
-                break;
-            case ESP_RST_TASK_WDT:
-            case ESP_RST_INT_WDT:
-                ESP_LOGI(TAG, "Reset Reason is WATCHDOG %d. MessageLogEntry is added", reason);
-                this->LogJournal(messagecodes::C::WATCHDOG, 0);
-                break;
-            default:
-                ESP_LOGI(TAG, "Reset Reason is %d. MessageLog Memory is reset", reason);
-                messageLog.fill({0, 0, 0, 0});
-                break;
-            }
-
-            //Create usersetting manager
-            this->userSettings = new UserSettings("nvs", this);
-            //Forward logging to browser
-            esp_log_set_vprintf(M::logging_vprintf);
+            this->plugins=plugins;
 
             wifi_manager_retry_timer = xTimerCreate("retry timer", pdMS_TO_TICKS(WIFI_MANAGER_RETRY_TIMER), pdFALSE, (void *)0, [](TimerHandle_t t){webmanager::M::GetSingleton()->webmanager_timer_retry_cb(t);});
             wifi_manager_shutdown_ap_timer = xTimerCreate("shutdown_ap_timer", pdMS_TO_TICKS(WIFI_MANAGER_SHUTDOWN_AP_TIMER), pdFALSE, (void *)0, [](TimerHandle_t t){webmanager::M::GetSingleton()->webmanager_timer_shutdown_ap_cb(t);});
@@ -893,40 +1036,28 @@ namespace webmanager
 
             ESP_ERROR_CHECK(mdns_init());
             ESP_ERROR_CHECK(mdns_hostname_set(hostname));
-            const char* MDNS_INSTANCE="SENSACT_MDNS_INSTANCE";
+            const char* MDNS_INSTANCE="ESP32_MDNS_INSTANCE";
             ESP_ERROR_CHECK(mdns_instance_name_set(MDNS_INSTANCE));
 
             //turn wifi logging nearly off
             esp_log_level_set("wifi", ESP_LOG_WARN);
 
-            // prepare simple network time protocol client and start it, when we got an IP-Adress (see event handler)
+            //Turn Power Saving off
+            ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+            // SNTP (simple network time protocol) client and start it, when we got an IP address (see event handler)
             esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
             esp_sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
             esp_sntp_setservername(0, "pool.ntp.org");
             esp_sntp_set_time_sync_notification_cb([](struct timeval *tv){webmanager::M::GetSingleton()->sntp_handler();});
-            // Set timezone to Berlin
-            setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+            setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);// Germany
             tzset();
 
 
-            ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-            if (resetStoredWifiConnection)
+            if (resetStoredWifiConnection || read_sta_config()!=ESP_OK)
             {
-                ESP_LOGI(TAG, "Forced to delete saved wifi configuration. Starting access point and do an initial scan.");
+                ESP_LOGI(TAG, "Forced to delete saved wifi configuration or no config found. Starting access point and do an initial scan.");
                 delete_sta_config();
-                ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-                ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
-                ESP_ERROR_CHECK(esp_wifi_start());
-                ESP_ERROR_CHECK(esp_wifi_scan_start(nullptr/*for default config*/, false));
-                staState = WifiStationState::NO_CONNECTION;
-                scanIsActive=true;
-                initialScanIsActive=true;
-            }
-            else if (read_sta_config() != ESP_OK)
-            {
-                ESP_LOGI(TAG, "No saved wifi configuration found on startup. Starting access point and do an initial scan.");
-                
                 ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
                 ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
                 ESP_ERROR_CHECK(esp_wifi_start());
@@ -937,8 +1068,9 @@ namespace webmanager
             }
             else
             {
-                ESP_LOGI(TAG, "Saved wifi found on startup. Will attempt to connect to ssid %s with password %s.", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
-   
+                remainingAttempsToConnectAsSTA=ATTEMPTS_TO_RECONNECT_ON_STARTUP_BEFORE_OPENING_AN_ACCESS_POINT;
+                ESP_LOGI(TAG, "Saved wifi found on startup. Will attempt %lu times to connect to ssid %s with password %s.",remainingAttempsToConnectAsSTA, wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
+                //auf keinen Fall einen AccessPoint aufmachen
                 ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
                 ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta));
                 ESP_ERROR_CHECK(esp_wifi_start());
@@ -947,11 +1079,6 @@ namespace webmanager
                 scanIsActive=false;
                 initialScanIsActive=false;
             }
-
-            
-            //temperature_sensor_config_t temp_sensor = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
-            //ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor, &temp_handle));
-            //ESP_ERROR_CHECK(temperature_sensor_enable(temp_handle));
             ESP_LOGI(TAG, "Webmanager has been succcessfully initialized");
             return ESP_OK;
         }
@@ -959,6 +1086,7 @@ namespace webmanager
         esp_err_t CallMeAfterInitializationToMarkCurrentPartitionAsValid()
         {
             /* Mark current app as valid */
+             ESP_LOGI(TAG, "Webmanager marks current Partition as valid");
             const esp_partition_t *partition = esp_ota_get_running_partition();
             esp_ota_img_states_t ota_state;
             if (esp_ota_get_state_partition(partition, &ota_state) == ESP_OK)
@@ -969,57 +1097,6 @@ namespace webmanager
                 }
             }
             return ESP_OK;
-        }
-
-        void LogJournal(messagecodes::C messageCode, uint32_t messageData)
-        {
-            bool entryFound{false};
-            struct timeval tv_now;
-            gettimeofday(&tv_now, nullptr);
-            xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
-            for (int i = 0; i < messageLog.size(); i++)
-            {
-                if (messageLog[i].messageCode == 0)
-                {
-                    ESP_LOGD(TAG, "Found an empty logging slot on pos %d for messageCode %lu", i, (uint32_t)messageCode);
-                    messageLog[i].messageCode = (uint32_t)messageCode;
-                    messageLog[i].lastMessageData = messageData;
-                    messageLog[i].lastMessageTimestamp = tv_now.tv_sec;
-                    messageLog[i].messageCount = 1;
-                    entryFound = true;
-                    break;
-                }
-                else if (messageLog[i].messageCode == (uint32_t)messageCode)
-                {
-                    ESP_LOGD(TAG, "Found an updateable logging slot on pos %d for messageCode %lu", i, (uint32_t)messageCode);
-                    messageLog[i].lastMessageData = messageData;
-                    messageLog[i].lastMessageTimestamp = tv_now.tv_sec;
-                    messageLog[i].messageCount++;
-                    entryFound = true;
-                    break;
-                }
-            }
-            if (!entryFound)
-            {
-                // search oldest and overwrite
-                time_t oldestTimestamp = messageLog[0].lastMessageTimestamp;
-                size_t oldestIndex{0};
-                for (size_t i = 1; i < messageLog.size(); i++)
-                {
-                    if (messageLog[i].lastMessageTimestamp < oldestTimestamp)
-                    {
-                        oldestTimestamp = messageLog[i].lastMessageTimestamp;
-                        oldestIndex = i;
-                    }
-                }
-                ESP_LOGD(TAG, "Found the oldest logging slot on pos %d for messageCode %lu", oldestIndex, (uint32_t)messageCode);
-                messageLog[oldestIndex].messageCode = (uint32_t)messageCode;
-                messageLog[oldestIndex].lastMessageData = messageData;
-                messageLog[oldestIndex].lastMessageTimestamp = tv_now.tv_sec;
-                messageLog[oldestIndex].messageCount = 1;
-            }
-            xSemaphoreGive(webmanager_semaphore);
-            return;
         }
     };
 
