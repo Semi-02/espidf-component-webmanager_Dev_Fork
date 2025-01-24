@@ -483,7 +483,7 @@ namespace webmanager
             if(ns==wifimanager::Namespace::Namespace_Value){
                 auto rw = flatbuffers::GetRoot<wifimanager::RequestWrapper>(fb_buf);
                 wifimanager::Requests reqType=rw->request_type();
-                ESP_LOGI(TAG, "Received websocket frame: len=%d, requestType=%d ", (int)ws_pkt.len, reqType);
+                ESP_LOGI(TAG, "Received wifimanager request: len=%d, requestType=%d ", (int)ws_pkt.len, reqType);
                 switch (reqType){
                 case wifimanager::Requests::Requests_RequestNetworkInformation:
                     sendResponseNetworkInformation(req, &ws_pkt, rw->request_as_RequestNetworkInformation());
@@ -536,17 +536,26 @@ namespace webmanager
             return ret;
         negativeresponse:
             flatbuffers::FlatBufferBuilder b(256);
-            b.Finish(wifimanager::CreateResponseWifiConnectDirect(b, false, (char*)wifi_config_sta.sta.ssid, 0,0,0,0));
+            b.Finish(
+                wifimanager::CreateResponseWrapper(
+                    b,
+                    wifimanager::Responses::Responses_ResponseWifiConnect,
+                    wifimanager::CreateResponseWifiConnectDirect(b, false, (char*)wifi_config_sta.sta.ssid, 0,0,0,0).Union()
+                )
+            );
             return WrapAndSendAsync(wifimanager::Namespace::Namespace_Value,  b);
         }
 
         esp_err_t handleRequestWifiDisconnect(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const wifimanager::RequestWifiDisconnect *wifiDisconnect){
             flatbuffers::FlatBufferBuilder b(256);
-            auto res =  wifimanager::CreateResponseWifiDisconnect(b);
-            auto mwresp= wifimanager::CreateResponseWrapper(b, wifimanager::Responses::Responses_ResponseWifiDisconnect, res.Union());
-            b.Finish(mwresp);
-            AsyncResponse *a = new AsyncResponse(wifimanager::Namespace::Namespace_Value, &b);
-            if(httpd_queue_work(http_server, M::ws_async_send, a)!=ESP_OK){delete(a);}
+            b.Finish(
+                wifimanager::CreateResponseWrapper(
+                    b, 
+                    wifimanager::Responses::Responses_ResponseWifiDisconnect, 
+                    wifimanager::CreateResponseWifiDisconnect(b).Union()
+                )
+            );
+            WrapAndSendAsync(wifimanager::Namespace::Namespace_Value, b);
             vTaskDelay(pdMS_TO_TICKS(2000)); // warte 200ms, um die Beantwortung des Requests noch zu ermöglichen
             xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
             staState = WifiStationState::NO_CONNECTION;
@@ -560,7 +569,7 @@ namespace webmanager
 
         esp_err_t sendResponseNetworkInformation(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const wifimanager::RequestNetworkInformation  *netInfo){
             bool forceUpdate = netInfo->force_new_search();
-            ESP_LOGI(TAG, "Prepare to send ResponseWifiAccesspoints");
+            ESP_LOGI(TAG, "Prepare to send CreateResponseNetworkInformationDirect");
             esp_err_t forcedScanResult{ESP_OK};
             if(!initialScanIsActive && !scanIsActive && forceUpdate){
                 forcedScanResult=esp_wifi_scan_start(nullptr/*for default config*/, true);
@@ -571,9 +580,11 @@ namespace webmanager
             flatbuffers::FlatBufferBuilder b(1024);
             std::vector<flatbuffers::Offset<wifimanager::AccessPoint>> ap_vector;
             if(forceUpdate && forcedScanResult!=ESP_OK){
+                ESP_LOGE(TAG, "Forced scan finished earlier with %s", esp_err_to_name(forcedScanResult));
                 ap_vector.push_back(wifimanager::CreateAccessPoint(b, b.CreateString("Error while forced scanning"), forcedScanResult, 0, 0));
             }
             else if(initialScanIsActive){
+                ESP_LOGW(TAG, "Initial Scan was still active. Refresh page in a few seconds!");
                 ap_vector.push_back(wifimanager::CreateAccessPoint(b, b.CreateString("Initial Scan was still active. Refresh page in a few seconds!"), 0, 0, 0));
             
             }else{
@@ -590,18 +601,26 @@ namespace webmanager
             wifi_ap_record_t ap={};
             esp_wifi_sta_get_ap_info(&ap);
             xSemaphoreGive(webmanager_semaphore);
-            b.Finish(wifimanager::CreateResponseNetworkInformationDirect(b, 
-                hostname, 
-                (char*)wifi_config_ap.ap.ssid,
-                (char*)wifi_config_ap.ap.password,
-                ap_ip_info.ip.addr,
-                this->staState==WifiStationState::CONNECTED,
-                (char*)wifi_config_sta.sta.ssid,
-                sta_ip_info.ip.addr,
-                sta_ip_info.netmask.addr,
-                sta_ip_info.gw.addr,
-                ap.rssi,
-                &ap_vector));
+            b.Finish(
+                wifimanager::CreateResponseWrapper(
+                    b, 
+                    wifimanager::Responses::Responses_ResponseNetworkInformation,
+                    wifimanager::CreateResponseNetworkInformationDirect(
+                        b, 
+                        hostname, 
+                        (char*)wifi_config_ap.ap.ssid,
+                        (char*)wifi_config_ap.ap.password,
+                        ap_ip_info.ip.addr,
+                        this->staState==WifiStationState::CONNECTED,
+                        (char*)wifi_config_sta.sta.ssid,
+                        sta_ip_info.ip.addr,
+                        sta_ip_info.netmask.addr,
+                        sta_ip_info.gw.addr,
+                        ap.rssi,
+                        &ap_vector
+                    ).Union()
+                )
+            );
             return WrapAndSendAsync(wifimanager::Namespace::Namespace_Value, b);
         }
         

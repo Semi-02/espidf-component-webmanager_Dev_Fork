@@ -1,4 +1,4 @@
-namespace system;
+namespace systeminfo;
 
 enum Namespace:uint32{
     Value=2
