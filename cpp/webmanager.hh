@@ -91,7 +91,7 @@ namespace webmanager
         SemaphoreHandle_t webmanager_semaphore{nullptr};
         TimerHandle_t wifi_manager_retry_timer{nullptr};
         TimerHandle_t wifi_manager_shutdown_ap_timer{nullptr};
-        temperature_sensor_handle_t temp_handle{nullptr};
+        
         httpd_handle_t http_server{nullptr};
         int websocket_file_descriptor{-1};
         
@@ -111,10 +111,12 @@ namespace webmanager
         
             AsyncResponse(uint32_t ns, flatbuffers::FlatBufferBuilder* b){
                 uint8_t* bp=b->GetBufferPointer();
-                buffer_len = b->GetSize();
-                buffer = new uint8_t[buffer_len+4];
+                size_t flatbuffer_data_size = b->GetSize();
+                buffer_len=sizeof(uint32_t) + flatbuffer_data_size;
+                buffer = new uint8_t[buffer_len];
+                ESP_LOGI(TAG, "Preparing a buffer of size %d+%d", sizeof(uint32_t), flatbuffer_data_size);
                 ((uint32_t*)buffer)[0]=ns;
-                std::memcpy(buffer+4, bp, buffer_len);
+                std::memcpy(buffer+sizeof(uint32_t), bp, flatbuffer_data_size);
             }
 
             ~AsyncResponse(){
@@ -146,7 +148,7 @@ namespace webmanager
         {
             nvs_handle handle{0};
             esp_err_t ret = ESP_OK;
-            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
+            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
             GOTO_ERROR_ON_ERROR(nvs_erase_key(handle, nvs_key_wifi_ssid), "Unable to delete wifi ssid");
             GOTO_ERROR_ON_ERROR(nvs_erase_key(handle, nvs_key_wifi_password), "Unable to delete wifi password");
             ret = nvs_commit(handle);
@@ -166,7 +168,7 @@ namespace webmanager
             size_t sz{0};
 
             ESP_LOGI(TAG, "About to save config to flash!!");
-            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
+            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
             sz = sizeof(tmp_ssid);
             ret = nvs_get_str(handle, nvs_key_wifi_ssid, tmp_ssid, &sz);
             if ((ret == ESP_OK && strcmp((char *)tmp_ssid, (char *)wifi_config_sta.sta.ssid) != 0) || ret == ESP_ERR_NVS_NOT_FOUND)
@@ -204,7 +206,7 @@ namespace webmanager
             nvs_handle handle;
             esp_err_t ret = ESP_OK;
             size_t sz;
-            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
+            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
             sz = sizeof(wifi_config_sta.sta.ssid);
             ret = nvs_get_str(handle, nvs_key_wifi_ssid, (char *)wifi_config_sta.sta.ssid, &sz);
             if (ret != ESP_OK)
@@ -313,7 +315,13 @@ namespace webmanager
                         esp_wifi_scan_start(nullptr/*for default config*/, false);
                         scanIsActive=true;
                         flatbuffers::FlatBufferBuilder b(256);
-                        b.Finish(wifimanager::CreateResponseWifiConnectDirect(b, false, (char*)wifi_config_sta.sta.ssid, 0,0,0));
+                        b.Finish(
+                            wifimanager::CreateResponseWrapper(
+                                b,
+                                wifimanager::Responses::Responses_ResponseWifiConnect,
+                                wifimanager::CreateResponseWifiConnectDirect(b, false, (char*)wifi_config_sta.sta.ssid, 0,0,0).Union()
+                            )
+                        );
                         WrapAndSendAsync(wifimanager::Namespace::Namespace_Value, b);
                     }
                     else
@@ -399,7 +407,13 @@ namespace webmanager
                     wifi_ap_record_t ap = {};
                     esp_wifi_sta_get_ap_info(&ap);
                     flatbuffers::FlatBufferBuilder b(256);
-                    b.Finish(wifimanager::CreateResponseWifiConnectDirect(b, true, (char*)wifi_config_sta.sta.ssid, event->ip_info.ip.addr, event->ip_info.netmask.addr, event->ip_info.gw.addr));
+                    b.Finish(
+                        wifimanager::CreateResponseWrapper(
+                            b,
+                            wifimanager::Responses::Responses_ResponseWifiConnect,
+                            wifimanager::CreateResponseWifiConnectDirect(b, true, (char*)wifi_config_sta.sta.ssid, event->ip_info.ip.addr, event->ip_info.netmask.addr, event->ip_info.gw.addr).Union()
+                        )
+                    );  
                     this->ipAddr=event->ip_info.ip;
                     WrapAndSendAsync(wifimanager::Namespace::Namespace_Value, b);
                 }
@@ -442,7 +456,7 @@ namespace webmanager
             if(myself->http_server && myself->websocket_file_descriptor!=-1){
                 httpd_ws_frame_t ws_pkt={false, false, HTTPD_WS_TYPE_BINARY, a->buffer, a->buffer_len};
                 httpd_ws_send_frame_async(myself->http_server, myself->websocket_file_descriptor, &ws_pkt);
-                //printf("httpd_ws_send_frame_async: http:%lu fd:%i data_len:%u\n", (uint32_t)myself->http_server, myself->websocket_file_descriptor, a->buffer_len);
+                ESP_LOGI(TAG, "httpd_ws_send_frame_async: data_len:%u\n", ws_pkt.len);
                 //should be syncronous. So the buffer can be deleted, when the function returns
             }
             delete a;
@@ -592,6 +606,7 @@ namespace webmanager
                 {
                     wifi_ap_record_t* ap = accessp_records+i;
                     ap_vector.push_back(wifimanager::CreateAccessPoint(b, b.CreateString((char*)ap->ssid), ap->primary, ap->rssi, ap->authmode));
+                    ESP_LOGI(TAG, "  AP %25s; %4d", (char*)ap->ssid, ap->rssi);
                 }
             }
             esp_netif_ip_info_t ap_ip_info = {};
@@ -1097,6 +1112,9 @@ namespace webmanager
                 staState = WifiStationState::ABOUT_TO_CONNECT;
                 scanIsActive=false;
                 initialScanIsActive=false;
+            }
+            for(const auto& i : *this->plugins){
+                i->OnBegin(this);
             }
             ESP_LOGI(TAG, "Webmanager has been succcessfully initialized");
             return ESP_OK;

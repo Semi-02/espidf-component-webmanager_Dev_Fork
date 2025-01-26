@@ -16,7 +16,7 @@ namespace webmanager{
     constexpr time_t WIFI_MANAGER_SHUTDOWN_AP_TIMER = 60000;
     constexpr wifi_auth_mode_t AP_AUTHMODE{wifi_auth_mode_t::WIFI_AUTH_WPA2_PSK};
     constexpr char NVS_PARTITION[]{"nvs"};
-    constexpr char NVS_NAMESPACE[]{"webmananger"};
+    constexpr char WIFI_NVS_NAMESPACE[]{"wifimananger"};
     constexpr char nvs_key_wifi_ssid[]{"ssid"};
     constexpr char nvs_key_wifi_password[]{"password"};
 }
