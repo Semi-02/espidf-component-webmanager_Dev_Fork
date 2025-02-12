@@ -25,7 +25,6 @@
 #include <lwip/netdb.h>
 #include <lwip/ip4_addr.h>
 #include <driver/gpio.h>
-#include <driver/temperature_sensor.h>
 #include <nvs.h>
 #include <spi_flash_mmap.h>
 #include <esp_sntp.h>
@@ -389,8 +388,9 @@ namespace webmanager
              * the application when the IPV4 changes to a valid one. */
             case IP_EVENT_STA_GOT_IP:
             {
-                ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-                ESP_LOGI(TAG, "Got IP from DHCP: ip=" IPSTR " netmask=" IPSTR " gw=" IPSTR " hostname=%s", IP2STR(&event->ip_info.ip), IP2STR(&event->ip_info.netmask), IP2STR(&event->ip_info.gw), hostname);
+                const ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+                const esp_netif_ip_info_t *ip = &event->ip_info;
+                ESP_LOGI(TAG, "WIFI STA got IP from DHCP: ip=" IPSTR " netmask=" IPSTR " gw=" IPSTR " hostname=%s", IP2STR(&ip->ip), IP2STR(&ip->netmask), IP2STR(&ip->gw), hostname);
                 remainingAttempsToConnectAsSTA=ATTEMPTS_TO_RECONNECT_DURING_OPERATION_BEFORE_OPENING_AN_ACCESS_POINT;
                 staState = WifiStationState::CONNECTED;
                 update_sta_config_lazy();
@@ -402,7 +402,7 @@ namespace webmanager
                     xTimerStart(wifi_manager_shutdown_ap_timer, portMAX_DELAY);
                 }
                 xSemaphoreGive(webmanager_semaphore);
-                esp_sntp_init();
+                esp_sntp_init(); //seems to be safe if called twice (ETH and WIFI STA!)
                 if(http_server){
                     wifi_ap_record_t ap = {};
                     esp_wifi_sta_get_ap_info(&ap);
@@ -419,6 +419,21 @@ namespace webmanager
                 }
                 break;
             }
+
+            case IP_EVENT_ETH_GOT_IP:
+            {
+                const ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+                const esp_netif_ip_info_t *ip = &(event->ip_info);
+                ESP_LOGI(TAG, "ETHERNET got IP from DHCP: ip=" IPSTR " netmask=" IPSTR " gw=" IPSTR " hostname=%s", IP2STR(&ip->ip), IP2STR(&ip->netmask), IP2STR(&ip->gw), hostname);
+                esp_sntp_init();//seems to be safe if called twice (ETH and WIFI STA!)
+                break;
+            }
+
+            case IP_EVENT_ETH_LOST_IP:
+            {
+                ESP_LOGI(TAG, "IP_EVENT_ETH_LOST_IP");
+                break;
+            }
             /* This event arises when the IPV4 address become invalid.
              * IP_STA_LOST_IP doesn’t arise immediately after the WiFi disconnects, instead it starts an IPV4 address lost timer,
              * if the IPV4 address is got before ip lost timer expires, IP_EVENT_STA_LOST_IP doesn’t happen. Otherwise, the event
@@ -430,6 +445,7 @@ namespace webmanager
                 ESP_LOGD(TAG, "IP_EVENT_STA_LOST_IP");
                 break;
             }
+
             }
         }
 

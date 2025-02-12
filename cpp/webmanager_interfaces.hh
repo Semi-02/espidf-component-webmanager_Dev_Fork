@@ -27,4 +27,10 @@ namespace webmanager
         virtual void OnTimeUpdate(iWebmanagerCallback *callback)=0;
         virtual eMessageReceiverResult ProvideWebsocketMessage(iWebmanagerCallback *callback, httpd_req_t *req, httpd_ws_frame_t *ws_pkt, uint32_t ns, uint8_t* buf) = 0;
     };
+
+    class iScheduler{
+    public:
+        virtual uint16_t GetCurrentValueOfSchedule(const char* schedulerName)=0;
+        virtual void FillFlatbufferWithAvailableNames(flatbuffers::FlatBufferBuilder &b, std::vector<flatbuffers::Offset<flatbuffers::String>> &vect)=0;
+    };
 }

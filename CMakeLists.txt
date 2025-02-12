@@ -1,5 +1,10 @@
+if(NOT DEFINED GENERATED_DIR)
+    message(ERROR "NOT DEFINED GENERATED_DIR!!!")
+endif()
+
 idf_component_register(
-    INCLUDE_DIRS "cpp"
+    INCLUDE_DIRS "cpp" "${GENERATED_DIR}"
     SRCS "cpp/webmanager.cc"
-    REQUIRES "main" "flatbuffers-25.1.21" "mdns" "common"  "errorcodes" "esp_http_server" "esp_https_server" "spiffs"  "app_update" "esp_wifi"
+    REQUIRES "flatbuffers-25.1.24" "mdns" "common"  "errorcodes" "esp_http_server" "esp_https_server" "spi_flash" "spiffs"  "app_update" "esp_wifi"
     )
+
