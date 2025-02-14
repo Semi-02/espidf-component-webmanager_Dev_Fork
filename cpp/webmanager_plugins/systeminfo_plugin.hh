@@ -98,8 +98,8 @@ public:
         temp_sensor_config.clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT;
         temp_sensor_config.flags.allow_pd =0;
 
-        ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor_config, &tempHandle));
-        ESP_ERROR_CHECK(temperature_sensor_enable(tempHandle));
+        temperature_sensor_install(&temp_sensor_config, &tempHandle);//do not check success. Wenn es schon anderweitig "installed" wurde, würde es sonst hier einen Fehler geben!
+        temperature_sensor_enable(tempHandle);
     }
     void OnWifiConnect(webmanager::iWebmanagerCallback *callback) override { (void)(callback); }
     void OnWifiDisconnect(webmanager::iWebmanagerCallback *callback) override { (void)(callback); }
