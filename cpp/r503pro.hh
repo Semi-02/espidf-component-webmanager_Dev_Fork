@@ -86,7 +86,6 @@ namespace fingerprint
         AutoIdentify = 0x32,   // Automatic fingerprint verification
     };
 
-
     enum class RET
     {
         OK = 0x00,                           //!< Command execution is complete
@@ -143,8 +142,6 @@ namespace fingerprint
         //if changes are made here, update the enum fingerprint_controller.ts on web client
     };
     
-
-
     enum class PARAM_INDEX : uint8_t
     {
         BAUD_RATE_CONTROL = 4, // N= [1/2/4/6/12]. Corresponding baud rate is 9600*N bps。, Default 6
@@ -215,8 +212,8 @@ namespace fingerprint
 
     class iFingerprintHandler{
         public:
-        virtual void HandleFingerprintDetected(uint8_t errorCode, uint16_t finger, uint16_t score)=0;
-        virtual void HandleEnrollmentUpdate(uint8_t errorCode, uint8_t step, uint16_t finger, const char* name)=0;
+        virtual void HandleFingerprintDetected(uint16_t errorCode, uint16_t finger, uint16_t score)=0;
+        virtual void HandleEnrollmentUpdate(uint16_t errorCode, uint8_t step, uint16_t finger, const char* name)=0;
     };
 
     class iFingerprintActionHandler:public iFingerprintHandler{
@@ -237,13 +234,6 @@ namespace fingerprint
         bool isInEnrollment{false};
         iFingerprintHandler* handler;
         uint32_t targetAddress{0xFFFFFFFF};
-        
-
-        static void static_task(void *args)
-        {
-            R503Pro *myself = static_cast<R503Pro *>(args);
-            myself->task();
-        }
 
         void task()
         {
@@ -454,6 +444,7 @@ public:
             }
             return RET::OK;
         }
+        
         RET ReadAllSysPara(SystemParameter& outParams){
             RET ret;
             ret= ReadSysPara(outParams);
@@ -560,10 +551,10 @@ public:
             fingerName[MAX_FINGERNAME_LEN+1]=0;
         }
         
-        RET begin(gpio_num_t tx_host, gpio_num_t rx_host)
+        RET Begin(gpio_num_t tx_host, gpio_num_t rx_host)
         {
 
-            /* Install UART friver */
+            /* Install UART driver */
             uart_config_t c = {};
             c.baud_rate = 57600;
             c.data_bits = UART_DATA_8_BITS;
@@ -585,10 +576,48 @@ public:
                 ESP_LOGE(TAG, "Communication error with fingerprint reader. Error code %d", (int)ret);
                 return RET::HARDWARE_ERROR;
             }
+            uint32_t password=0;
+            bool passwordOk{false};
+            VerifyPassword(password, passwordOk);
+            if(!passwordOk){
+                ESP_LOGE(TAG, "Default Password %lu is not accepted. Trying to crack it...", password);
+                for(password=0; password<UINT32_MAX;password++){
+                    VerifyPassword(password, passwordOk);
+                    if(passwordOk){
+                        ESP_LOGE(TAG, "Password %lu IS ACCEPTED. ", password);
+                        break;
+                    }else if(password%100==0){
+                        ESP_LOGI(TAG, "Probing %lu", password);
+                    }
+                }
+            }else{
+                ESP_LOGI(TAG, "Default Password %lu is accepted", password);
+            }
+
+            ret=SetSysPara(fingerprint::PARAM_INDEX::BAUD_RATE_CONTROL, (uint8_t)PARAM_BAUD::_115200);
+            uart_set_baudrate(uart_num, 115200);
+
             ESP_LOGI(TAG, "Successfully connected with fingerprint addr=%lu; securityLevel=%u; libSize=%u; libUsed=%u fwVer=%s; algVer=%s; status=%u", params.deviceAddress,params.securityLevel, params.librarySizeMax, params.librarySizeUsed, params.fwVer, params.algVer, params.status);
             
-            xTaskCreate(static_task, "fingerprint", 3072, this, 10, nullptr);
+            xTaskCreate([](void *p){((R503Pro*)p)->task(); }, "fingerprint", 3072, this, 10, nullptr);
             return RET::OK;
+        }
+
+        RET VerifyPassword(uint32_t pwd, bool& passwordCorrect)
+        {
+            uint8_t data[5];
+            WriteU8((uint8_t)INSTRUCTION::VfyPwd, data, 0);
+            WriteU32_BigEndian(pwd, data, 1);
+            createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data));
+            size_t wireLength{12};
+            uint8_t buffer[wireLength];
+            RET ret=receiveAndCheckPackage(buffer, wireLength);
+            if(ret!=RET::OK){
+                ESP_LOGE(TAG, "In VerifyPassword Parser error %d", (int)ret);
+                return ret;
+            }
+            passwordCorrect=buffer[9]==0;//==RET::OK!
+            return (RET)buffer[9];
         }
 
         fingerprint::SystemParameter* GetAllParams(){

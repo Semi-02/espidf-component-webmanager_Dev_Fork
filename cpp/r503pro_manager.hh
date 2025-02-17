@@ -14,6 +14,7 @@
 #include "sdkconfig.h"
 #include "r503pro.hh"
 #include <common.hh>
+#include <common-esp32.hh>
 #include "webmanager_interfaces.hh"
 
 #define TAG "FINGER"
@@ -34,7 +35,7 @@ namespace fingerprint
     public:
         R503ProManager(uart_port_t uart_num, gpio_num_t gpio_irq, iFingerprintActionHandler *handler, webmanager::iScheduler *scheduler, nvs_handle_t nvsFingerName2FingerIndex, nvs_handle_t nvsFingerIndex2SchedulerName, nvs_handle_t nvsFingerIndex2ActionIndex, uint32_t targetAddress = DEFAULT_ADDRESS) : R503Pro(uart_num, gpio_irq, this), handler(handler), scheduler(scheduler), nvsFingerName2FingerIndex(nvsFingerName2FingerIndex), nvsFingerIndex2SchedulerName(nvsFingerIndex2SchedulerName), nvsFingerIndex2ActionIndex(nvsFingerIndex2ActionIndex) {}
 
-        void HandleFingerprintDetected(uint8_t errorCode, uint16_t fingerIndex, uint16_t score)
+        void HandleFingerprintDetected(uint16_t errorCode, uint16_t fingerIndex, uint16_t score)
         {
             
             if (handler)
@@ -60,45 +61,71 @@ namespace fingerprint
                 }
             }
         }
-        void HandleEnrollmentUpdate(uint8_t errorCode, uint8_t step, uint16_t fingerIndex, const char *fingerName) override
+        
+        void HandleEnrollmentUpdate(uint16_t errorCode, uint8_t step, uint16_t fingerIndex, const char *fingerName) override
         {
             ESP_LOGI(TAG, "'%s'", enrollStep2description[step]);
-            if (step == 0x0F)
-            {
-                esp_err_t err{ESP_OK};
-                char fingerIndexAsString[6];
-                snprintf(fingerIndexAsString, 6, "%d", fingerIndex);
-
-                ESP_ERROR_CHECK(nvs_set_u16(this->nvsFingerName2FingerIndex, fingerName, fingerIndex));
-                ESP_ERROR_CHECK(nvs_commit(this->nvsFingerName2FingerIndex));
-                ESP_ERROR_CHECK(nvs_set_u16(this->nvsFingerIndex2ActionIndex, fingerIndexAsString, 0));
-                ESP_ERROR_CHECK(nvs_commit(this->nvsFingerIndex2ActionIndex));
-                ESP_ERROR_CHECK(nvs_set_str(this->nvsFingerIndex2SchedulerName, fingerIndexAsString, "ALWAYS"));
-                ESP_ERROR_CHECK(nvs_commit(this->nvsFingerIndex2SchedulerName));
-
-                if (err != ESP_OK)
-                {
-                    ESP_LOGE(TAG, "Finger with index %d could not be stored in nvs with key %s. Error code %d", fingerIndex, fingerName, err);
-                }
-                else
-                {
-                    ESP_LOGI(TAG, "'%s', Finger is stored in index %d", enrollStep2description[step], fingerIndex);
-                }
+            esp_err_t ret;
+            if (step != 0x0F){
+                if(handler) handler->HandleEnrollmentUpdate(errorCode, step, fingerIndex, fingerName);
+                return;
             }
-            if (handler)
-                handler->HandleEnrollmentUpdate(errorCode, step, fingerIndex, fingerName);
+            
+            char fingerIndexAsString[6];
+            snprintf(fingerIndexAsString, 6, "%d", fingerIndex);
+
+            GOTO_ERROR_ON_ERROR(nvs_set_u16(this->nvsFingerName2FingerIndex, fingerName, fingerIndex), "nvs");
+            GOTO_ERROR_ON_ERROR(nvs_set_u16(this->nvsFingerIndex2ActionIndex, fingerIndexAsString, 0), "nvs");
+            GOTO_ERROR_ON_ERROR(nvs_set_str(this->nvsFingerIndex2SchedulerName, fingerIndexAsString, "ALWAYS"), "nvs");
+            
+            GOTO_ERROR_ON_ERROR(nvs_commit(this->nvsFingerName2FingerIndex), "nvs");
+            GOTO_ERROR_ON_ERROR(nvs_commit(this->nvsFingerIndex2ActionIndex), "nvs");
+            GOTO_ERROR_ON_ERROR(nvs_commit(this->nvsFingerIndex2SchedulerName), "nvs");
+            ESP_LOGI(TAG, "'%s', Finger is stored in index %d", enrollStep2description[step], fingerIndex);
+            if(handler) handler->HandleEnrollmentUpdate(errorCode, step, fingerIndex, fingerName);   
+            return;   
+        error:
+            ESP_LOGE(TAG, "Finger with index %d could not be stored in nvs with key %s. Error code %d", fingerIndex, fingerName, err);
+            if(handler) handler->HandleEnrollmentUpdate(errorCode, step, fingerIndex, fingerName);
+            return;
         }
 
         RET Begin(gpio_num_t tx_host, gpio_num_t rx_host)
         {
             mutex = xSemaphoreCreateMutex();
-            auto ret = R503Pro::begin(tx_host, rx_host);
+            auto ret = R503Pro::Begin(tx_host, rx_host);
             if(ret!=RET::OK){
                 return ret;
             }
-            //auto params=this->GetAllParams();
-            //TODO: Abgleich interner Speicher des R503 mit dem, was im Flash steht
-            //TODO: Fingerprint-Infos sollten in einem einzigen Objekt gespeichert werden.
+            //Die ganzen Parameter wurden intern im R503Pro::Begin bereits eingelesen und stehen jetzt zur verfügung
+            auto params=this->GetAllParams();
+            uint16_t fingerIndex = 0;
+            for (uint8_t bi = 0; bi < 32; bi++) {
+                auto the_byte = params->libraryIndicesUsed[bi];
+                for (uint8_t biti = 0; biti < 8; biti++) {
+                    if (the_byte & (1 << biti)) {
+                        //"fingerIndex" is used. Check, whether there exists an extry in nvs
+                        char fingerIndexAsString[6];
+                        snprintf(fingerIndexAsString, 6, "%d", fingerIndex);
+                        uint16_t dummy;
+                        if(nvs_get_u16(this->nvsFingerIndex2ActionIndex, fingerIndexAsString, &dummy)==ESP_ERR_NVS_NOT_FOUND){
+                            //Index existiert im Reader, aber nicht im nvs -->Eintrag anlegen mit Dummy-Namen
+                            char fingerName[14];
+                            snprintf(fingerName, 14, "Finger %d", fingerIndex);
+                            ESP_ERROR_CHECK(nvs_set_u16(this->nvsFingerName2FingerIndex, fingerName, fingerIndex));
+                            ESP_ERROR_CHECK(nvs_set_u16(this->nvsFingerIndex2ActionIndex, fingerIndexAsString, 0));
+                            ESP_ERROR_CHECK(nvs_set_str(this->nvsFingerIndex2SchedulerName, fingerIndexAsString, "ALWAYS"));
+                            
+                            ESP_ERROR_CHECK(nvs_commit(this->nvsFingerName2FingerIndex));
+                            ESP_ERROR_CHECK(nvs_commit(this->nvsFingerIndex2ActionIndex));
+                            ESP_ERROR_CHECK(nvs_commit(this->nvsFingerIndex2SchedulerName));
+                            ESP_LOGI(TAG, "Finger index %d got name '%s'", fingerIndex, fingerName);
+           
+                        }
+                    }
+                    fingerIndex++;
+                }
+            }
             return RET::OK;
 
         }

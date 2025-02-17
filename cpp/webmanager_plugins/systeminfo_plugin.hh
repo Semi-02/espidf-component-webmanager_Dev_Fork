@@ -42,7 +42,9 @@ private:
         gettimeofday(&tv_now, nullptr);
 
         float tsens_out{0.0};
-        ESP_ERROR_CHECK(temperature_sensor_get_celsius(tempHandle, &tsens_out));
+        if(tempHandle){
+            ESP_ERROR_CHECK(temperature_sensor_get_celsius(tempHandle, &tsens_out));
+        }
         uint8_t mac_buffer[6];
         esp_read_mac(mac_buffer, ESP_MAC_BT);
         auto bt = systeminfo::Mac6(mac_buffer);
@@ -84,22 +86,14 @@ private:
     }
 
 public:
-    SystemInfoPlugin()
+    SystemInfoPlugin(temperature_sensor_handle_t tempHandle):tempHandle(tempHandle)
     {
     }
 
     void OnBegin(webmanager::iWebmanagerCallback *callback) override
     {
         (void)(callback);
-        temperature_sensor_config_t temp_sensor_config = {};
 
-        temp_sensor_config.range_min = -10;
-        temp_sensor_config.range_max = 80;
-        temp_sensor_config.clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT;
-        temp_sensor_config.flags.allow_pd =0;
-
-        temperature_sensor_install(&temp_sensor_config, &tempHandle);//do not check success. Wenn es schon anderweitig "installed" wurde, würde es sonst hier einen Fehler geben!
-        temperature_sensor_enable(tempHandle);
     }
     void OnWifiConnect(webmanager::iWebmanagerCallback *callback) override { (void)(callback); }
     void OnWifiDisconnect(webmanager::iWebmanagerCallback *callback) override { (void)(callback); }

@@ -49,8 +49,6 @@
 
 #define TAG "WMAN"
 
-
-
 namespace webmanager
 {
     constexpr size_t HTTP_BUFFER_SIZE{2*2048};
@@ -127,17 +125,12 @@ namespace webmanager
             http_buffer=new uint8_t[HTTP_BUFFER_SIZE];
         }
 
-        bool hasRealtime(){
-            struct timeval tv_now;
-            gettimeofday(&tv_now, nullptr);
-            time_t seconds_epoch = tv_now.tv_sec;
-            return seconds_epoch > 1684412222; // epoch time when this code has been written
-        }
 
-        void connectAsSTA()
+
+        void connectAsSTA(bool keepApActive)
         {
             ESP_LOGI(TAG, "Trying to connect as station. ssid='%s', password='%s'.", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
-            ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+            ESP_ERROR_CHECK(esp_wifi_set_mode(keepApActive?WIFI_MODE_APSTA:WIFI_MODE_STA));
             ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta));
             ESP_ERROR_CHECK(esp_wifi_connect());
             staState = WifiStationState::ABOUT_TO_CONNECT;
@@ -235,7 +228,7 @@ namespace webmanager
             xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
             if (staState == WifiStationState::SHOULD_CONNECT)
             {
-                connectAsSTA();
+                connectAsSTA(false);
             }
             xSemaphoreGive(webmanager_semaphore);
         }
@@ -562,7 +555,7 @@ namespace webmanager
             snprintf((char *)wifi_config_sta.sta.password, MAX_PASSPHRASE_LEN - 1, password);
             ESP_LOGI(TAG, "Got a new SSID %s and PASSWORD %s from browser.", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
             remainingAttempsToConnectAsSTA = 1;
-            connectAsSTA();
+            connectAsSTA(true);
             return ret;
         negativeresponse:
             flatbuffers::FlatBufferBuilder b(256);
@@ -955,6 +948,13 @@ namespace webmanager
 
         const char* GetSsid(){
             return this->ssid;
+        }
+
+        bool HasRealtime(){
+            struct timeval tv_now;
+            gettimeofday(&tv_now, nullptr);
+            time_t seconds_epoch = tv_now.tv_sec;
+            return seconds_epoch > 1684412222; // epoch time when this code has been written
         }
 
         esp_err_t WrapAndSendAsync(uint32_t ns, ::flatbuffers::FlatBufferBuilder &b)override
