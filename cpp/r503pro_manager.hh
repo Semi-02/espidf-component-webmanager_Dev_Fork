@@ -85,7 +85,7 @@ namespace fingerprint
             if(handler) handler->HandleEnrollmentUpdate(errorCode, step, fingerIndex, fingerName);   
             return;   
         error:
-            ESP_LOGE(TAG, "Finger with index %d could not be stored in nvs with key %s. Error code %d", fingerIndex, fingerName, err);
+            ESP_LOGE(TAG, "Finger with index %d could not be stored in nvs with key %s. Error code %d", fingerIndex, fingerName, ret);
             if(handler) handler->HandleEnrollmentUpdate(errorCode, step, fingerIndex, fingerName);
             return;
         }
