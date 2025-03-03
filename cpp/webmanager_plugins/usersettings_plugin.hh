@@ -41,7 +41,7 @@ struct GroupAndEnumSetting
     const char *settingkey;
 };
 
-#include "nvs/nvs_accessor.hh.inc"
+#include "usersettings/nvs_accessor.hh.inc"
 
 class UsersettingsPlugin : public webmanager::iWebmanagerPlugin
 {
