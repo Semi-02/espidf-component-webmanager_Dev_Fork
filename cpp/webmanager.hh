@@ -54,9 +54,9 @@ namespace webmanager
     constexpr size_t HTTP_BUFFER_SIZE{2*2048};
     constexpr size_t MAX_FILE_SIZE{256*1024};
     /* Max length a file path can have on storage */
-    constexpr size_t FILE_PATH_MAX{ESP_VFS_PATH_MAX + CONFIG_SPIFFS_OBJ_NAME_LEN};
-
-    constexpr const char* FILES_BASE_PATH = "/files";
+    constexpr size_t FILE_PATH_MAX{20+ESP_VFS_PATH_MAX + CONFIG_SPIFFS_OBJ_NAME_LEN};
+    constexpr const char* FILES_GLOB = "/files/*";
+    constexpr const size_t FILES_BASE_PATH_LEN = 6;
 
     enum class WifiStationState
     {
@@ -111,7 +111,7 @@ namespace webmanager
                 size_t flatbuffer_data_size = b->GetSize();
                 buffer_len=sizeof(uint32_t) + flatbuffer_data_size;
                 buffer = new uint8_t[buffer_len];
-                ESP_LOGI(TAG, "Preparing a buffer of size %d+%d", sizeof(uint32_t), flatbuffer_data_size);
+                ESP_LOGD(TAG, "Preparing a buffer of size %d+%d", sizeof(uint32_t), flatbuffer_data_size);
                 ((uint32_t*)buffer)[0]=ns;
                 std::memcpy(buffer+sizeof(uint32_t), bp, flatbuffer_data_size);
             }
@@ -478,6 +478,11 @@ namespace webmanager
                 ESP_LOGI(TAG, "Handshake done, the new websocket connection was opened");
                 return ESP_OK;
             }
+
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+
             httpd_ws_frame_t ws_pkt={false, false, HTTPD_WS_TYPE_BINARY, nullptr, 0};
 
             //always store the last websocket file descriptor
@@ -734,65 +739,36 @@ namespace webmanager
             return ESP_OK;
         }
 
-        const char* get_path_from_uri(char *dest, const char *base_path, const char *uri, size_t destsize)
-        {
-            const size_t base_pathlen = strlen(base_path);
-            size_t pathlen = strlen(uri);
-
-            const char *quest = strchr(uri, '?');
-            if (quest) {
-                pathlen = std::min((int)pathlen, (int)(quest - uri));
-            }
-            const char *hash = strchr(uri, '#');
-            if (hash) {
-                pathlen = std::min((int)pathlen, (int)(hash - uri));
-            }
-
-            if (base_pathlen + pathlen + 1 > destsize) {
-                /* Full path string won't fit into destination buffer */
-                return nullptr;
-            }
-
-            /* Construct full path (base + path) */
-            strcpy(dest, base_path);
-            strlcpy(dest + base_pathlen, uri, pathlen + 1);
-
-            /* Return pointer to path, skipping the base */
-            return dest + base_pathlen;
-        }
-        
-
         esp_err_t handle_files_get(httpd_req_t *req)
         {
-            char filepath[FILE_PATH_MAX];
             FILE *fd = nullptr;
             struct stat file_stat;
-
-            const char *filename = get_path_from_uri(filepath, FILES_BASE_PATH, req->uri, sizeof(filepath));
-            if (!filename) {
-                ESP_LOGE(TAG, "Filename is too long");
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
-                return ESP_FAIL;
-            }
+            
+            const char *path = req->uri+FILES_BASE_PATH_LEN;
+            ESP_LOGI(TAG, "Got GET files for filename %s ",path);
+            
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
 
             /* If name has trailing '/', respond with directory contents */
-            if (filename[strlen(filename) - 1] == '/') {
-                return http_resp_dir_html(req, filepath);
+            if (path[strlen(path) - 1] == '/') {
+                return http_resp_dir_html(req, path);
             }
 
-            if (stat(filepath, &file_stat) == -1) {
+            if (stat(path, &file_stat) == -1) {
                 httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
                 return ESP_FAIL;
             }
 
-            fd = fopen(filepath, "r");
+            fd = fopen(path, "r");
             if (!fd) {
-                ESP_LOGE(TAG, "Failed to read existing file : %s", filepath);
+                ESP_LOGE(TAG, "Failed to read existing file : %s", path);
                 httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read existing file");
                 return ESP_FAIL;
             }
 
-            ESP_LOGI(TAG, "Sending file : %s (%ld bytes)...", filename, file_stat.st_size);
+            ESP_LOGI(TAG, "Sending file : %s (%ld bytes)...", path, file_stat.st_size);
 
             size_t chunksize;
             do {
@@ -817,26 +793,26 @@ namespace webmanager
 
         esp_err_t handle_files_post(httpd_req_t *req)
         {
-            char filepath[FILE_PATH_MAX];
             FILE *fd = NULL;
             struct stat file_stat;
-
+            
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
    
-            const char *filename = get_path_from_uri(filepath, FILES_BASE_PATH, req->uri, sizeof(filepath));
-            if (!filename) {
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
+            const char *path = req->uri+FILES_BASE_PATH_LEN;
+            ESP_LOGI(TAG, "Got POST files for filename %s ",path);
+
+
+            if (path[strlen(path) - 1] == '/') {
+                ESP_LOGE(TAG, "We need a filename, not a directory name : %s", path);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "We need a filename, not a directory name!");
                 return ESP_FAIL;
             }
 
-
-            if (filename[strlen(filename) - 1] == '/') {
-                ESP_LOGE(TAG, "Invalid filename : %s", filename);
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid filename");
-                return ESP_FAIL;
-            }
-
-            if (stat(filepath, &file_stat) == 0) {
-                ESP_LOGE(TAG, "File already exists : %s", filepath);
+            if (false && stat(path, &file_stat) == 0) {
+                //Files should be overwritten, hence "false &&"
+                ESP_LOGE(TAG, "File already exists : %s", path);
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File already exists");
                 return ESP_FAIL;
             }
@@ -848,14 +824,14 @@ namespace webmanager
                 return ESP_FAIL;
             }
 
-            fd = fopen(filepath, "w");
+            fd = fopen(path, "w");
             if (!fd) {
-                ESP_LOGE(TAG, "Failed to create file : %s", filepath);
+                ESP_LOGE(TAG, "Failed to create file : %s", path);
                 httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create file");
                 return ESP_FAIL;
             }
 
-            ESP_LOGI(TAG, "Receiving file : %s...", filename);
+            ESP_LOGI(TAG, "Receiving file : %s...", path);
             size_t received;
             size_t remaining = req->content_len;
 
@@ -868,7 +844,7 @@ namespace webmanager
                     /* In case of unrecoverable error,
                     * close and delete the unfinished file*/
                     fclose(fd);
-                    unlink(filepath);
+                    unlink(path);
                     ESP_LOGE(TAG, "File reception failed!");
                     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive file");
                     return ESP_FAIL;
@@ -879,7 +855,7 @@ namespace webmanager
                     /* Couldn't write everything to file!
                     * Storage may be full? */
                     fclose(fd);
-                    unlink(filepath);
+                    unlink(path);
 
                     ESP_LOGE(TAG, "File write failed!");
                     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to write file to storage");
@@ -890,7 +866,12 @@ namespace webmanager
 
 
             fclose(fd);
-            ESP_LOGI(TAG, "File reception complete");
+            if (stat(path, &file_stat) != 0) {
+                ESP_LOGE(TAG, "File stat was not possible. write failed!");
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File stat was not possible. write failed!");
+                return ESP_FAIL;
+            }
+            ESP_LOGI(TAG, "File reception for %s complete. File has %ldbytes", path, file_stat.st_size);
             httpd_resp_sendstr(req, "File uploaded successfully");
             return ESP_OK;
         }
@@ -899,27 +880,25 @@ namespace webmanager
         {
             char filepath[FILE_PATH_MAX];
             struct stat file_stat;
-            const char *filename = get_path_from_uri(filepath, FILES_BASE_PATH, req->uri, sizeof(filepath));
-            if (!filename) {
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Filename too long");
-                return ESP_FAIL;
-            }
+            const char *path = req->uri+FILES_BASE_PATH_LEN;
+            ESP_LOGI(TAG, "Got DELETE files for filename %s ",path);
 
             /* Filename cannot have a trailing '/' */
-            if (filename[strlen(filename) - 1] == '/') {
-                ESP_LOGE(TAG, "Invalid filename : %s", filename);
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid filename");
+            if (path[strlen(path) - 1] == '/') {
+                ESP_LOGE(TAG, "We need a filename, not a directory name : %s", path);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "We need a filename, not a directory name!");
                 return ESP_FAIL;
+               
             }
 
-            if (stat(filepath, &file_stat) == -1) {
-                ESP_LOGE(TAG, "File does not exist : %s", filename);
+            if (stat(path, &file_stat) == -1) {
+                ESP_LOGE(TAG, "File does not exist : %s", path);
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File does not exist");
                 return ESP_FAIL;
             }
 
-            ESP_LOGI(TAG, "Deleting file : %s", filename);
-            unlink(filepath);
+            ESP_LOGI(TAG, "Deleting file : %s", path);
+            unlink(path);
             httpd_resp_sendstr(req, "File deleted successfully");
             return ESP_OK;
         }
@@ -967,7 +946,7 @@ namespace webmanager
         void RegisterHTTPDHandlers(httpd_handle_t httpd_handle)
         {
             httpd_uri_t files_get = {
-                FILES_BASE_PATH, 
+                FILES_GLOB, 
                 HTTP_GET, 
                 [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_files_get(req);}, 
                 this, false, false, nullptr
@@ -975,7 +954,7 @@ namespace webmanager
             ESP_ERROR_CHECK(httpd_register_uri_handler(httpd_handle, &files_get));
 
             httpd_uri_t files_post = {
-                FILES_BASE_PATH, 
+                FILES_GLOB, 
                 HTTP_POST, 
                 [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_files_post(req);}, 
                 this, false, false, nullptr
@@ -983,7 +962,7 @@ namespace webmanager
             ESP_ERROR_CHECK(httpd_register_uri_handler(httpd_handle, &files_post));
 
             httpd_uri_t files_delete = {
-                FILES_BASE_PATH, 
+                FILES_GLOB, 
                 HTTP_DELETE, 
                 [](httpd_req_t *req){return static_cast<M *>(req->user_ctx)->handle_files_delete(req);}, 
                 this, false, false, nullptr

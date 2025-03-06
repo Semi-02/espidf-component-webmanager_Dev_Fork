@@ -4,8 +4,6 @@ enum Namespace:uint32{
     Value=2
 }
 
-
-
 struct Mac6 {
     v:[uint8:6];
 }
