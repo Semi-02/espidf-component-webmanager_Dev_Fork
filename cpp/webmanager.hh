@@ -15,7 +15,7 @@
 #include <esp_chip_info.h>
 #include <esp_mac.h>
 #include <esp_wifi.h>
-#include <esp_https_server.h>
+
 #include "esp_tls.h"
 #include <hal/efuse_hal.h>
 #include <nvs_flash.h>
@@ -35,9 +35,6 @@
 #include <sys/time.h>
 #if (CONFIG_HTTPD_MAX_REQ_HDR_LEN<1024)
     #error CONFIG_HTTPD_MAX_REQ_HDR_LEN<1024 (Max HTTP Request Header Length)
-#endif
-#ifndef CONFIG_ESP_HTTPS_SERVER_ENABLE
-    #error "Enable HTTPS in menuconfig"
 #endif
 #ifndef CONFIG_HTTPD_WS_SUPPORT
  #error "Enable Websocket support for HTTPD in menuconfig"
