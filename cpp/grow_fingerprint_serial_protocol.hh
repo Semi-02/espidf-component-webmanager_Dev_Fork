@@ -128,7 +128,7 @@ namespace grow_fingerprint
         WRONG_NOTEPAD_PAGE_NUMBER = 0x1c,
         COMMUNICATION_PORT_FAILURE = 0x1d,
         AUTOMATIC_ENROLLMENT_FAILER=0x1e,
-        FINGERPRINT_DATABASE_IS_FULL=0x1f
+        FINGERPRINT_DATABASE_IS_FULL=0x1f,
  
 
         ADDRESS_CODE_INCORRECT = 0x20,
@@ -226,19 +226,7 @@ namespace grow_fingerprint
         char* fwVer;
     };
     
-    class iFingerprintHandler{
-        public:
-        virtual void HandleFingerprintDetected(uint16_t errorCode, uint16_t finger, uint16_t score)=0;
-        virtual void HandleEnrollmentUpdate(uint16_t errorCode, uint8_t step, uint16_t finger, const char* name)=0;
-    };
-
-    class iFingerprintActionHandler:public iFingerprintHandler{
-        public:
-        //call this, when the action should be executed (no error, timetable ok)
-        virtual void HandleFingerprintAction(uint16_t fingerIndex, int action)=0;
-    };
-
-
+ 
     class PackageCreatorAndParser
     {
     protected:
@@ -308,7 +296,7 @@ namespace grow_fingerprint
             uint8_t buffer[wireLength];
             RET ret=receiveAndCheckPackage(buffer, wireLength);
             if(ret!=RET::OK){
-                ESP_LOGE(TAG, templateStringForParserError, (int)ret);
+                ESP_LOGE(TAG, "%s %d", templateStringForParserError, (int)ret);
                 return ret;
             }
             return (RET)buffer[9];
@@ -319,7 +307,7 @@ namespace grow_fingerprint
             uint8_t buffer[wireLength];
             RET ret=receiveAndCheckPackage(buffer, wireLength);
             if(ret!=RET::OK){
-                ESP_LOGE(TAG, templateStringForParserError, (int)ret);
+                ESP_LOGE(TAG, "%s %d", templateStringForParserError, (int)ret);
                 return ret;
             }
             val=ParseU16_BigEndian(buffer, 10);
@@ -331,7 +319,7 @@ namespace grow_fingerprint
             uint8_t buffer[wireLength];
             RET ret=receiveAndCheckPackage(buffer, wireLength);
             if(ret!=RET::OK){
-                ESP_LOGE(TAG, templateStringForParserError, (int)ret);
+                ESP_LOGE(TAG, "%s %d", templateStringForParserError, (int)ret);
                 return ret;
             }
             val=ParseU32_BigEndian(buffer, 10);
@@ -356,8 +344,6 @@ namespace grow_fingerprint
             return RET::OK;
         }
 
-protected:  
-
         RET VerifyPassword(uint32_t pwd, bool& passwordCorrect)
         {
             createAndSendInstructionPacketU32(INSTRUCTION::VfyPwd, pwd);
@@ -373,27 +359,27 @@ protected:
 
         RET GetRandomCode(uint32_t& randomCode_out){
             createAndSendInstructionPacket(INSTRUCTION::GetRandomCode);
-            return receiveAndCheckU32(randomCode_out, "In GetRandomCode Parser error %d")
+            return receiveAndCheckU32(randomCode_out, "In GetRandomCode Parser error");
         }
 
         RET SetAddress(uint32_t address){
             createAndSendInstructionPacketU32(INSTRUCTION::SetAddr, address);
             this->targetAddress=address;
-            return receiveAndCheck("In SetAddress Parser error %d");
+            return receiveAndCheck("In SetAddress Parser error");
         }
 
         RET SetSysPara(PARAM_INDEX param, uint8_t value){
             createAndSendInstructionPacketU8U8(INSTRUCTION::SetSysPara,(uint8_t)param,value);
-            return receiveAndCheck("In SetSysPara Parser error %d");
+            return receiveAndCheck("In SetSysPara Parser error");
         }
 
         RET PortControlUSB(bool activateUSB){
             createAndSendInstructionPacketU8(INSTRUCTION::SetSysPara,(uint8_t)activateUSB);
-            return receiveAndCheck("In PortControlUSB Parser error %d");
+            return receiveAndCheck("In PortControlUSB Parser error");
         }
 
         RET ReadSysPara(SystemParameter& outParams, uint16_t expectedSystemIdentifierCode){
-            createAndSendInstructionPacket(INSTRUCTION::ReadSysParam);
+            createAndSendInstructionPacket(INSTRUCTION::ReadSysPara);
             const size_t wireLength{2+4+1+2+1+16+2};
             uint8_t buffer[wireLength];
             RET ret=receiveAndCheckPackage(buffer, wireLength);
@@ -431,10 +417,6 @@ protected:
             return ret;
         }
 
-        fingerprint::SystemParameter* GetAllParams(){
-            return &this->params;
-        }
-
         RET Get32ByteString(INSTRUCTION instr, char** stringToBeDeletedByCaller){
             char* string = new char[33];
             string[32]='\0';
@@ -467,7 +449,7 @@ protected:
         */
         RET GetTemplateNumber(uint16_t& num){
             createAndSendInstructionPacket(INSTRUCTION::TemplateNum);
-            auto ret= receiveAndCheckU16(num, "In GetTemplateNumber Parser error %d")
+            auto ret= receiveAndCheckU16(num, "In GetTemplateNumber Parser error");
             ESP_LOGI(TAG, "Fingerprint reader has %d (0x%04X) valid templates", num, num);
             return ret;
         }
@@ -492,47 +474,48 @@ protected:
         
         RET GenImg(){
             createAndSendInstructionPacket(INSTRUCTION::GenImg);
-            return receiveAndCheck("In GenImg Parser error %d");
+            return receiveAndCheck("In GenImg Parser error");
         }
 
         RET GenChar(uint8_t bufferNumber){
             createAndSendInstructionPacketU8(INSTRUCTION::GenChar, bufferNumber);
-            return receiveAndCheck("In GenChar Parser error %d");
+            return receiveAndCheck("In GenChar Parser error");
         }
 
         RET RegModel(){
             createAndSendInstructionPacket(INSTRUCTION::RegModel);
-            return receiveAndCheck("In RegModel Parser error %d");
+            return receiveAndCheck("In RegModel Parser error");
         }
 
         RET StoreTemplate(uint16_t locationNumber){
             createAndSendInstructionPacketU16(INSTRUCTION::Store, locationNumber);
-            return receiveAndCheck("In RegModel Parser error %d");
+            return receiveAndCheck("In RegModel Parser error");
         }
 
 
         RET DeleteChar(uint16_t startIndex, uint16_t count){
-            createAndSendInstructionPacketU16(INSTRUCTION::DeleteChar, startIndex, count);
-            return receiveAndCheck("In DeleteChar Parser error %d");
+            createAndSendInstructionPacketU16U16(INSTRUCTION::DeleteChar, startIndex, count);
+            return receiveAndCheck("In DeleteChar Parser error");
         }
 
         RET EmptyLibrary(){
             createAndSendInstructionPacket(INSTRUCTION::Empty);
-            return receiveAndCheck("In EmptyLibrary Parser error %d");
+            return receiveAndCheck("In EmptyLibrary Parser error");
         }
 
         RET CancelInstruction(){
             createAndSendInstructionPacket(INSTRUCTION::Cancel);
-            return receiveAndCheck("In CancelInstruction Parser error %d");
+            return receiveAndCheck("In CancelInstruction Parser error");
         }
 
         RET HighSpeedSearch(uint8_t buffer, uint16_t startPage, uint16_t pageCount){
             uint8_t data[6];
-            WriteU8((uint8_t)INSTRUCTION::HiSpeedSearch, data 0);
+            WriteU8((uint8_t)INSTRUCTION::HiSpeedSearch, data, 0);
             WriteU8(buffer, data, 1);
             WriteU16_BigEndian(startPage, data, 2);
             WriteU16_BigEndian(pageCount, data, 4);
             createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data));
+            return RET::OK;
         }
 
         RET AutoEnroll(uint16_t& fingerIndexOr0xFFFF_inout, bool overwriteExisting, bool duplicateFingerAllowed, bool returnStatusDuringProcess, bool fingerHasToLeaveBetweenScans){
@@ -544,7 +527,6 @@ protected:
             data[5]=returnStatusDuringProcess?1:0;
             data[6]=fingerHasToLeaveBetweenScans?1:0;
             createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data), true);
-            this->isInEnrollment=true;
             ESP_LOGI(TAG, "AutoEnroll started"); 
             return RET::OK;
         }
@@ -577,13 +559,6 @@ protected:
             }
             return RET::OK;
         }
-        
-        
-
-        
-
-
     };
-
 }
 #undef TAG
