@@ -2,7 +2,7 @@
 
 #include "webmanager_interfaces.hh"
 #include "flatbuffers/flatbuffers.h"
-#include "flatbuffers_cpp/systeminfo_generated.h"
+#include "flatbuffers_cpp/ns02systeminfo_generated.h"
 #include <driver/temperature_sensor.h>
 #define TAG "SYSINFO"
 

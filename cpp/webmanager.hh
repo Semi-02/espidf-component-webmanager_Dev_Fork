@@ -42,7 +42,7 @@
 #include "esp_vfs.h"
 #include "webmanager_constants.hh"
 #include "webmanager_interfaces.hh"
-#include "flatbuffers_cpp/wifimanager_generated.h"
+#include "flatbuffers_cpp/ns01wifimanager_generated.h"
 
 #define TAG "WMAN"
 
