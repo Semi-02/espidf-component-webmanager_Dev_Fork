@@ -22,7 +22,7 @@ namespace grow_fingerprint
     constexpr size_t NOTEPAD_SIZE_BYTES{16 * 32};
     constexpr size_t FEATURE_BUFFER_MAX{6};
     constexpr uint32_t DEFAULT_ADDRESS{0xFFFFFFFF};
-    constexpr uint32_t DEFAULT_PASSWORD{0xFFFFFFFF};
+    
     constexpr uint32_t DEFAULT_BAUD_RATE{57600};
     constexpr TickType_t DEFAULT_TIMEOUT_TICKS{pdMS_TO_TICKS(1000)}; //!< UART reading timeout in milliseconds
     constexpr size_t MAX_FINGERNAME_LEN=NVS_KEY_NAME_MAX_SIZE-1;
@@ -256,17 +256,17 @@ namespace grow_fingerprint
 
         void createAndSendInstructionPacket(INSTRUCTION i){
             uint8_t data[]{(uint8_t)i};
-            createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data), true);
+            createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data));
         }
 
         void createAndSendInstructionPacketU8(INSTRUCTION i, uint8_t payload){
             uint8_t data[]{(uint8_t)i, payload};
-            createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data), true);
+            createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data));
         }
 
         void createAndSendInstructionPacketU8U8(INSTRUCTION i, uint8_t payload1, uint8_t payload2){
             uint8_t data[]{(uint8_t)i, payload1, payload2};
-            createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data), true);
+            createAndSendDataPackage(PacketIdentifier::COMMANDPACKET, data, sizeof(data));
         }
 
         void createAndSendInstructionPacketU16(INSTRUCTION i, uint16_t payload){
@@ -327,10 +327,13 @@ namespace grow_fingerprint
         }
 
         //Gibt nur dann einen Fehler zurück, wenn das grundsätzliche Paketformat nicht passt
-        //Inhaltlich (Byte 9!) wird das Paket hier noch nicht geprüft
+        //Inhaltlich (z.B. Byte 9) wird das Paket hier noch nicht geprüft
         RET receiveAndCheckPackage(uint8_t* buf, size_t bufLen, TickType_t ticks_to_wait=DEFAULT_TIMEOUT_TICKS){
             int receivedBytes=uart_read_bytes(this->uart_num, buf, bufLen, ticks_to_wait);
-            if(receivedBytes!=bufLen) return RET::xPARSER_TIMEOUT;
+            if(receivedBytes!=bufLen){
+                ESP_LOGE(TAG, "Expected %u bytes, received %d bytes till timeout.", bufLen, receivedBytes);
+                return RET::xPARSER_TIMEOUT;
+            }
             if(ParseU16_BigEndian(buf, 0)!=STARTCODE) return RET::xPARSER_CANNOT_FIND_STARTCODE;
             if(ParseU32_BigEndian(buf, 2)!=targetAddress){
                 ESP_LOGE(TAG, "Wrong Module Address %lu",ParseU32_BigEndian(buf, 2));
@@ -344,17 +347,17 @@ namespace grow_fingerprint
             return RET::OK;
         }
 
-        RET VerifyPassword(uint32_t pwd, bool& passwordCorrect)
+        RET VerifyPassword(uint32_t pwd)
         {
             createAndSendInstructionPacketU32(INSTRUCTION::VfyPwd, pwd);
-            return receiveAndCheck("In VerifyPassword Parser error %d");
+            return receiveAndCheck("In VerifyPassword Parser error");
         }
 
         RET SetPassword(uint32_t pwd)
         {
             createAndSendInstructionPacketU32(INSTRUCTION::SetPwd, pwd);
             //Gemäß Handbuch vom R303S soll hier ganz ausnahmsweise ein Acknowledge-Paket mit nur 11bytes ohne Package Identifier zurck gemeldet werden
-            return receiveAndCheck("In SetPassword Parser error %d");
+            return receiveAndCheck("In SetPassword Parser error");
         }
 
         RET GetRandomCode(uint32_t& randomCode_out){
@@ -393,6 +396,7 @@ namespace grow_fingerprint
             outParams.status=ParseU16_BigEndian(buffer, 10);
             auto systemIdentifierCode=ParseU16_BigEndian(buffer, 12);
             if(systemIdentifierCode!=expectedSystemIdentifierCode){
+                ESP_LOGE(TAG, "Expected System Identifier Code %d, actual: %d", expectedSystemIdentifierCode, systemIdentifierCode);
                 return RET::xWRONG_SYSTEM_IDENTIFIER_CODE;
             }
             outParams.librarySizeMax=ParseU16_BigEndian(buffer, 14);

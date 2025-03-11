@@ -17,11 +17,11 @@
 #include "fingerprint_interfaces.hh"
 #include "grow_fingerprint_serial_protocol.hh"
 
-#define TAG "FINGER_HW"
+#define TAG "r503pro"
 namespace r503pro
 {
-
-
+    constexpr uint32_t DEFAULT_PASSWORD{0x00000000};
+    constexpr uint16_t SYSTEM_IDENFIFIER_CODE{600};//According to "R503Pro fingerprint module user manual-V1.1" this should be "0", but is "600"
     class R503Pro:public grow_fingerprint::PackageCreatorAndParser
     {
     private:
@@ -105,7 +105,7 @@ namespace r503pro
         grow_fingerprint::RET ReadAllSysPara(grow_fingerprint::SystemParameter &outParams)
         {
             grow_fingerprint::RET ret;
-            ret= ReadSysPara(outParams, 0x0000);
+            ret= ReadSysPara(outParams, SYSTEM_IDENFIFIER_CODE);
             if(ret!=grow_fingerprint::RET::OK) return ret;
             ret= GetAlgVer(&outParams.algVer);
             if(ret!=grow_fingerprint::RET::OK) return ret;
@@ -121,9 +121,9 @@ namespace r503pro
         char fingerName[grow_fingerprint::MAX_FINGERNAME_LEN + 1];
 
     public:
-        grow_fingerprint::RET AutoEnrollment(uint16_t &fingerIndexOr0xFFFF_inout, bool overwriteExisting, bool duplicateFingerAllowed, bool returnStatusDuringProcess, bool fingerHasToLeaveBetweenScans)
+        grow_fingerprint::RET AutoEnroll(uint16_t &fingerIndexOr0xFFFF_inout, bool overwriteExisting, bool duplicateFingerAllowed, bool returnStatusDuringProcess, bool fingerHasToLeaveBetweenScans)
         {
-            this->AutoEnroll(fingerIndexOr0xFFFF_inout, overwriteExisting, duplicateFingerAllowed, returnStatusDuringProcess, fingerHasToLeaveBetweenScans);
+            grow_fingerprint::PackageCreatorAndParser::AutoEnroll(fingerIndexOr0xFFFF_inout, overwriteExisting, duplicateFingerAllowed, returnStatusDuringProcess, fingerHasToLeaveBetweenScans);
             this->isInEnrollment=true;
             return grow_fingerprint::RET::OK;
         }
@@ -179,7 +179,7 @@ namespace r503pro
         grow_fingerprint::RET Begin(gpio_num_t tx_host, gpio_num_t rx_host)
         {
 
-            /* Install UART driver */
+            ESP_LOGI(TAG, "Install UART driver for Fingerprint TX_HOST=%d, RX_HOST=%d", tx_host, rx_host);
             uart_config_t c = {};
             c.baud_rate = 57600;
             c.data_bits = UART_DATA_8_BITS;
@@ -195,23 +195,16 @@ namespace r503pro
 
             gpio_pullup_en(gpio_irq);
             gpio_set_direction(gpio_irq, GPIO_MODE_INPUT);
-
-            grow_fingerprint::RET ret = ReadAllSysPara(this->params);
-            if (ret != grow_fingerprint::RET::OK)
-            {
-                ESP_LOGE(TAG, "Communication error with fingerprint reader. Error code %d", (int)ret);
-                return grow_fingerprint::RET::HARDWARE_ERROR;
-            }
-            uint32_t password = grow_fingerprint::DEFAULT_PASSWORD;
-            bool passwordOk{false};
-            VerifyPassword(password, passwordOk);
-            if (!passwordOk)
+            
+            uint32_t password = DEFAULT_PASSWORD;
+            grow_fingerprint::RET ret=VerifyPassword(password);
+            if (ret==grow_fingerprint::RET::WRONG_PASSWORD)
             {
                 ESP_LOGE(TAG, "Default Password %lu is not accepted. Trying to crack it...", password);
                 for (password = 0; password < UINT32_MAX; password++)
                 {
-                    VerifyPassword(password, passwordOk);
-                    if (passwordOk)
+                    ret=VerifyPassword(password);
+                    if (ret==grow_fingerprint::RET::OK)
                     {
                         ESP_LOGE(TAG, "Password %lu IS ACCEPTED. ", password);
                         break;
@@ -222,15 +215,27 @@ namespace r503pro
                     }
                 }
             }
-            else
+            else if(ret==grow_fingerprint::RET::OK)
             {
                 ESP_LOGI(TAG, "Default Password %lu is accepted", password);
             }
+            else{
+                ESP_LOGE(TAG, "Communication error with fingerprint reader. Error code %d", (int)ret);
+                return grow_fingerprint::RET::HARDWARE_ERROR;
+            }
+
+            ret = ReadAllSysPara(this->params);
+            if (ret != grow_fingerprint::RET::OK)
+            {
+                ESP_LOGE(TAG, "Communication error with fingerprint reader. Error code %d", (int)ret);
+                return grow_fingerprint::RET::HARDWARE_ERROR;
+            }
+            
 
             //ret = SetSysPara(fingerprint::PARAM_INDEX::BAUD_RATE_CONTROL, (uint8_t)PARAM_BAUD::_115200);
             //uart_set_baudrate(uart_num, 115200);
 
-            ESP_LOGI(TAG, "Successfully connected with fingerprint addr=%lu; securityLevel=%u; libSize=%u; libUsed=%u fwVer=%s; algVer=%s; status=%u", params.deviceAddress, params.securityLevel, params.librarySizeMax, params.librarySizeUsed, params.fwVer, params.algVer, params.status);
+            ESP_LOGI(TAG, "Successfully connected with fingerprint {'addr':%lu, 'securityLevel':%u, 'libSize':%u, 'libUsed':%u, 'fwVer':'%s', 'algVer'='%s', 'status':%u, 'baud9600':%u}", params.deviceAddress, params.securityLevel, params.librarySizeMax, params.librarySizeUsed, params.fwVer, params.algVer, params.status, params.baudRateTimes9600);
 
             xTaskCreate([](void *p)
                         { ((R503Pro *)p)->task(); }, "fingerprint", 3072, this, 10, nullptr);
