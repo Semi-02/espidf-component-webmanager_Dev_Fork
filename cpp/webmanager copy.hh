@@ -57,7 +57,6 @@ namespace webmanager
 
     enum class WifiStationState
     {
-
         NO_CONNECTION,      //Zustand während der Initialisierung wenn noch unklar ist, was Sache ist
                             //und auch, wenn keine brauchbaren Daten für einen Verbindungsaufbau vorliegen
         SHOULD_CONNECT,   // Daten sind verfügbar, die passen könnten. Es soll beim nächsten Retry-Tick ein Verbindungsversuch gestartet werden. Gerade im Moment wurde aber noch kein Verbindungsversiuch gestartet. -->Scan möglich
@@ -122,15 +121,18 @@ namespace webmanager
             http_buffer=new uint8_t[HTTP_BUFFER_SIZE];
         }
 
-
-
         void connectAsSTA(bool keepApActive)
         {
-            ESP_LOGI(TAG, "Trying to connect as station. ssid='%s', password='%s'.", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
-            //ESP_ERROR_CHECK(esp_wifi_set_mode(keepApActive?WIFI_MODE_APSTA:WIFI_MODE_STA));
+            wifi_mode_t mode;
+            esp_wifi_get_mode(&mode);
+            ESP_LOGI(TAG, "Trying to connect as station while in state %d and mode %d. ssid='%s', password='%s'.",(int)staState, (int)mode, wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
             ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta));
-            ESP_ERROR_CHECK(esp_wifi_connect());
+            if(!keepApActive){
+                ESP_ERROR_CHECK(esp_wifi_stop());
+
+            }
             staState = WifiStationState::ABOUT_TO_CONNECT;
+            ESP_LOGI(TAG, "Trying to connect as station. End of function");
         }
 
         esp_err_t delete_sta_config()
@@ -274,8 +276,10 @@ namespace webmanager
             }
             case WIFI_EVENT_STA_DISCONNECTED:
             {
+                ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED event (before sem)");
                 wifi_event_sta_disconnected_t *wifi_event_sta_disconnected = (wifi_event_sta_disconnected_t *)event_data;
                 xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
+                ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED event (after sem)");
                 //scanIsActive = false; // if a DISCONNECT message is posted while a scan is in progress this scan will NEVER end, causing scan to never work again. For this reason SCAN_BIT is cleared too
                 // if there was a timer on to stop the AP, well now it's time to cancel that since connection was lost! */
                 xTimerStop(wifi_manager_shutdown_ap_timer, portMAX_DELAY);
@@ -283,7 +287,10 @@ namespace webmanager
                 {
                 case WifiStationState::NO_CONNECTION:
                     ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED, when STA_STATE::NO_CONNECTION --> disconnection was requested by user. Start Access Point");
+                    ESP_ERROR_CHECK(esp_wifi_stop());
                     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+                    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+                    ESP_ERROR_CHECK(esp_wifi_start());
                     break;
                 case WifiStationState::CONNECTED:
                     ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED, when STA_STATE::CONNECTED --> unexpected disconnection. Try to reconnect %lu times.", remainingAttempsToConnectAsSTA);
@@ -300,8 +307,10 @@ namespace webmanager
                         ESP_LOGI(TAG, "Re-establishing connection failed finally (Reason %d). Start AccessPoint mode with ssid %s and password %s..", wifi_event_sta_disconnected->reason, wifi_config_ap.ap.ssid, wifi_config_ap.ap.password);
                         
                         staState = WifiStationState::NO_CONNECTION;
+                        ESP_ERROR_CHECK(esp_wifi_stop());
                         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
                         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+                        ESP_ERROR_CHECK(esp_wifi_start());
                         esp_wifi_scan_start(nullptr/*for default config*/, false);
                         scanIsActive=true;
                         flatbuffers::FlatBufferBuilder b(256);

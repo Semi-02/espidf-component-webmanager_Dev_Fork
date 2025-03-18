@@ -42,6 +42,7 @@
 #include "esp_vfs.h"
 #include "webmanager_constants.hh"
 #include "webmanager_interfaces.hh"
+#include "webmanager_async_response.hh"
 #include "flatbuffers_cpp/ns01wifimanager_generated.h"
 
 #define TAG "WMAN"
@@ -55,15 +56,26 @@ namespace webmanager
     constexpr const char* FILES_GLOB = "/files/*";
     constexpr const size_t FILES_BASE_PATH_LEN = 6;
 
-    enum class WifiStationState
-    {
-
-        NO_CONNECTION,      //Zustand während der Initialisierung wenn noch unklar ist, was Sache ist
-                            //und auch, wenn keine brauchbaren Daten für einen Verbindungsaufbau vorliegen
-        SHOULD_CONNECT,   // Daten sind verfügbar, die passen könnten. Es soll beim nächsten Retry-Tick ein Verbindungsversuch gestartet werden. Gerade im Moment wurde aber noch kein Verbindungsversiuch gestartet. -->Scan möglich
-        ABOUT_TO_CONNECT, // es wurde gerade ein Verbindungsaufbau gestartet, es ist aber noch nicht klar, ob der erfolgreich war -->Scan nicht möglich
-        CONNECTED,
+    enum class DesiredState{
+        AP,
+        STA,
     };
+
+    enum class WorkingState{//bezieht sich auf den State, der zuletzt erreicht wurde (also nicht der, der als nächstes erreicht werden soll)
+        INIT,
+        AP_STARTED, //Steady State -->nothing must 
+        STA_CONNECTED, 
+        AP_READY,
+        SCANNING_STARTED,
+        SCANNING_COMPLETED_NOT_USED_BECAUSE_WHEN_IT_IS_COMPLETED_WE_START_TO_CONNECT,
+        WAITING_TO_RECONNECT,
+        ABOUT_TO_CONNECT,
+    };
+    enum class CurrentState{
+        STA_NOT_CONNECTED,
+        STA_CONNECTED,
+    };
+
 
     class M : public webmanager::iWebmanagerCallback
     {
@@ -83,46 +95,22 @@ namespace webmanager
         uint16_t accessp_records_len{0};
 
         SemaphoreHandle_t webmanager_semaphore{nullptr};
-        TimerHandle_t wifi_manager_retry_timer{nullptr};
-        TimerHandle_t wifi_manager_shutdown_ap_timer{nullptr};
+        TimerHandle_t timer{nullptr};
         
         httpd_handle_t http_server{nullptr};
         int websocket_file_descriptor{-1};
         
-        WifiStationState staState{WifiStationState::NO_CONNECTION};
-        // bool accessPointIsActive{false}; // nein, diese Information kann über esp_wifi_get_mode() immer herausgefunden werden
+        //Das ist der Status, der alles beschreiben muss
+        CurrentState currentState{CurrentState::STA_NOT_CONNECTED};
+        DesiredState desiredState{DesiredState::AP};
+        WorkingState workingState{WorkingState::INIT};
         uint32_t remainingAttempsToConnectAsSTA{ATTEMPTS_TO_RECONNECT_ON_STARTUP_BEFORE_OPENING_AN_ACCESS_POINT};
-        bool initialScanIsActive{false};
-        bool scanIsActive{false};
-        esp_ip4_addr_t ipAddr;
-        const char* ssid="-";
+        
+
         std::vector<iWebmanagerPlugin*> *plugins{nullptr};
 
-        class AsyncResponse{
-            public:
-            uint8_t* buffer;
-            size_t buffer_len;
         
-            AsyncResponse(uint32_t ns, flatbuffers::FlatBufferBuilder* b){
-                uint8_t* bp=b->GetBufferPointer();
-                size_t flatbuffer_data_size = b->GetSize();
-                buffer_len=sizeof(uint32_t) + flatbuffer_data_size;
-                buffer = new uint8_t[buffer_len];
-                ESP_LOGD(TAG, "Preparing a buffer of size %d+%d", sizeof(uint32_t), flatbuffer_data_size);
-                ((uint32_t*)buffer)[0]=ns;
-                std::memcpy(buffer+sizeof(uint32_t), bp, flatbuffer_data_size);
-            }
-
-            ~AsyncResponse(){
-                delete[] buffer;
-            }
-        };
-
-        M(){
-            http_buffer=new uint8_t[HTTP_BUFFER_SIZE];
-        }
-
-
+        M(){http_buffer=new uint8_t[HTTP_BUFFER_SIZE];}
 
         void connectAsSTA(bool keepApActive)
         {
@@ -700,10 +688,6 @@ namespace webmanager
             return ESP_OK;
         }
 
-        /* Send HTTP response with a run-time generated html consisting of
-        * a list of all files and folders under the requested path.
-        * In case of SPIFFS this returns empty list when path is any
-        * string other than '/', since SPIFFS doesn't support directories */
         esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
         {
             struct dirent *entry;
@@ -916,15 +900,15 @@ namespace webmanager
         }
 
         const char* GetHostname(){
-            return this->hostname;
+            return esp_netif_get_hostname(WIFI_IF_STA);
         }
  
         esp_ip4_addr_t GetIpAddress(){
-            return this->ipAddr;
+            return esp_netif_get_ipaddrr(WIFI_IF_STA)
         }
 
         const char* GetSsid(){
-            return this->ssid;
+            return (const char*)this->wifi_config_sta.sta.ssid;
         }
 
         bool HasRealtime(){
@@ -995,7 +979,7 @@ namespace webmanager
             this->http_server=httpd_handle;
         }
 
-        esp_err_t Begin(const char *accessPointSsidPattern, const char *accessPointPassword, const char *hostnamePattern, bool resetStoredWifiConnection, std::vector<iWebmanagerPlugin*>* plugins, bool init_netif_and_create_event_loop = true)
+        esp_err_t Begin(const char *accessPointSsid, const char *accessPointPassword, const char *hostname, bool resetStoredWifiConnection, std::vector<iWebmanagerPlugin*>* plugins, bool init_netif_and_create_event_loop = true)
         {
             ESP_LOGI(TAG, "Stating Webmanager");
             if (strlen(accessPointPassword) < 8 && AP_AUTHMODE != WIFI_AUTH_OPEN)
@@ -1020,9 +1004,6 @@ namespace webmanager
 
             this->plugins=plugins;
 
-            wifi_manager_retry_timer = xTimerCreate("retry timer", pdMS_TO_TICKS(WIFI_MANAGER_RETRY_TIMER), pdFALSE, (void *)0, [](TimerHandle_t t){webmanager::M::GetSingleton()->webmanager_timer_retry_cb(t);});
-            wifi_manager_shutdown_ap_timer = xTimerCreate("shutdown_ap_timer", pdMS_TO_TICKS(WIFI_MANAGER_SHUTDOWN_AP_TIMER), pdFALSE, (void *)0, [](TimerHandle_t t){webmanager::M::GetSingleton()->webmanager_timer_shutdown_ap_cb(t);});
-
             // Create and check netifs
             wifi_netif_sta = esp_netif_create_default_wifi_sta();
             wifi_netif_ap = esp_netif_create_default_wifi_ap();
@@ -1046,18 +1027,10 @@ namespace webmanager
             wifi_config_sta.sta.pmf_cfg.capable = true;
             wifi_config_sta.sta.pmf_cfg.required = false;
 
-            // Prepare WIFI_CONFIG for ap mode
-            // make ssid unique --> append Mac Adress of wifi station to ssid
-            uint8_t mac[6];
-            esp_read_mac(mac, ESP_MAC_WIFI_STA);
-            wifi_config_ap.ap.ssid_len = snprintf((char *)wifi_config_ap.ap.ssid, sizeof(wifi_config_ap.ap.ssid), accessPointSsidPattern, mac[3], mac[4], mac[5]);
-            strcpy((char *)wifi_config_ap.ap.password, accessPointPassword);
-
             wifi_config_ap.ap.channel = 0;
             wifi_config_ap.ap.max_connection = 1;
             wifi_config_ap.ap.authmode = AP_AUTHMODE;
             
-            asprintf(&hostname, hostnamePattern, mac[3], mac[4], mac[5]);
             ESP_ERROR_CHECK(esp_netif_set_hostname(wifi_netif_sta, hostname));
             ESP_ERROR_CHECK(esp_netif_set_hostname(wifi_netif_ap, hostname));
 
@@ -1081,17 +1054,27 @@ namespace webmanager
             tzset();
 
 
-            if (resetStoredWifiConnection || read_sta_config()!=ESP_OK)
+            if (resetStoredWifiConnection)
             {
-                ESP_LOGI(TAG, "Forced to delete saved wifi configuration or no config found. Starting access point and do an initial scan.");
+                ESP_LOGI(TAG, "Forced to delete saved wifi configuration. Starting access point and do an initial scan.");
                 delete_sta_config();
                 ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
                 ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
                 ESP_ERROR_CHECK(esp_wifi_start());
                 ESP_ERROR_CHECK(esp_wifi_scan_start(nullptr/*for default config*/, false));
-                staState = WifiStationState::NO_CONNECTION;
-                scanIsActive=true;
-                initialScanIsActive=true;
+                currentState = CurrentState::STA_NOT_CONNECTED;
+                desiredState= DesiredState::AP;
+                workingState=WorkingState::SCANNING_STARTED;
+            }
+            else if(read_sta_config()!=ESP_OK){
+                ESP_LOGI(TAG, "Unable to read WIFI SSID or PASSWORD from flash. Starting access point and do an initial scan.");
+                ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+                ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+                ESP_ERROR_CHECK(esp_wifi_start());
+                ESP_ERROR_CHECK(esp_wifi_scan_start(nullptr/*for default config*/, false));
+                currentState = CurrentState::STA_NOT_CONNECTED;
+                desiredState= DesiredState::AP;
+                workingState=WorkingState::SCANNING_STARTED;
             }
             else
             {
@@ -1109,7 +1092,12 @@ namespace webmanager
             for(const auto& i : *this->plugins){
                 i->OnBegin(this);
             }
+
             ESP_LOGI(TAG, "Webmanager has been succcessfully initialized");
+
+            //Configure and start timer
+            timer = xTimerCreate("wifimanager_timer", TIMER_INTERVAL_TICKS, pdTRUE, nullptr, [](TimerHandle_t t){webmanager::M::GetSingleton()->webmanager_timer_retry_cb(t);});
+            xTimerStart(timer);
             return ESP_OK;
         }
 
@@ -1129,6 +1117,5 @@ namespace webmanager
             return ESP_OK;
         }
     };
-
 }
 #undef TAG
