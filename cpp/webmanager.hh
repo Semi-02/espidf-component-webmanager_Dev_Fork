@@ -48,6 +48,8 @@
 
 namespace webmanager
 {
+    extern const char webmanager_html_br_start[] asm("_binary_index_compressed_br_start");
+    extern const size_t webmanager_html_br_length asm("index_compressed_br_length");
     constexpr size_t HTTP_BUFFER_SIZE{2*2048};
     constexpr size_t MAX_FILE_SIZE{256*1024};
     /* Max length a file path can have on storage */
