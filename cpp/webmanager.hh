@@ -52,6 +52,7 @@ namespace webmanager
 {
     extern const char webmanager_html_br_start[] asm("_binary_index_compressed_br_start");
     extern const size_t webmanager_html_br_length asm("index_compressed_br_length");
+
     class M : public webmanager::iWebmanagerCallback
     {
     private:
