@@ -5,7 +5,7 @@
 #include <vector>
 #include <string>
 #include <flatbuffers/flatbuffers.h>
-#include <flatbuffers_cpp/scheduler_generated.h>
+#include <flatbuffers_cpp/ns08scheduler_generated.h>
 #include "esp_random.h"
 #include "sunsetsunrise.hh"
 #define TAG "SCHEDULER"
