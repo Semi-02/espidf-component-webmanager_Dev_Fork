@@ -35,7 +35,10 @@
 #include <esp_log.h>
 #include <sys/time.h>
 #if (CONFIG_HTTPD_MAX_REQ_HDR_LEN < 1024)
-#error CONFIG_HTTPD_MAX_REQ_HDR_LEN<1024 (Max HTTP Request Header Length)
+#error "CONFIG_HTTPD_MAX_REQ_HDR_LEN<1024 (Max HTTP Request Header Length)"
+#endif
+#if(CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE<4096)
+#error "CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE<4096"
 #endif
 #ifndef CONFIG_HTTPD_WS_SUPPORT
 #error "Enable Websocket support for HTTPD in menuconfig"
@@ -138,8 +141,13 @@ namespace webmanager
         {
             fallbackToStoredStaConfig=false;//because now, the AP must be the fallback
             ESP_LOGI(TAG, "Opening Access Point. {'ssid':'%s', 'password':'%s'}", wifi_config_ap.ap.ssid, wifi_config_ap.ap.password);
-            ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-            ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+            wifi_mode_t mode;
+            esp_wifi_get_mode(&mode);
+            if(mode!=WIFI_MODE_APSTA){
+                //has to be done "lazy", because otherwise already connected stations loose their connections
+                ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+                ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+            }
             this->setStatus(WorkingState::AP_STARTED, FAR_FUTURE);
         }
 
@@ -257,28 +265,37 @@ namespace webmanager
 
 
         void timSupervisor_cb(){
-            xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
-            time_t now_us = esp_timer_get_time();
-            ESP_LOGD("WMSV", "timSupervisor_cb workingState %s", ws2c(workingState));
-            if(now_us>tReconnect_us){
-                connectAsSTA(now_us, remainingAttempsToConnectAsSTA-1);
-            }
-            if(now_us>tShutdownAp_us){
-                wifi_mode_t mode;
-                esp_wifi_get_mode(&mode);
-                if(mode!=WIFI_MODE_STA){
-                    esp_wifi_set_mode(WIFI_MODE_STA);
-                    ESP_LOGI("WMSV", "Switching off AccessPoint");
-                }else{
-                    ESP_LOGI("WMSV", "Switching off AccessPoint...but it was already off.");
+            while(true){
+                xSemaphoreTake(webmanager_semaphore, portMAX_DELAY);
+                time_t now_us = esp_timer_get_time();
+                ESP_LOGI("WMSV", "timSupervisor_cb {'workingState':'%s', 'tReconnect':%lld, 'tShutdownAp':%lld, 'tTimeout':%lld}",
+                    ws2c(workingState),
+                   tReconnect_us/1000,
+                   tShutdownAp_us/1000,
+                   tTimeout_us/1000
+                   );
+                if(now_us>tReconnect_us){
+                    connectAsSTA(now_us, remainingAttempsToConnectAsSTA-1);
                 }
-                setStatus(WorkingState::KEEP_CONNECTION, FAR_FUTURE, FAR_FUTURE, FAR_FUTURE);
+                if(now_us>tShutdownAp_us){
+                    wifi_mode_t mode;
+                    esp_wifi_get_mode(&mode);
+                    if(mode!=WIFI_MODE_STA){
+                        esp_wifi_set_mode(WIFI_MODE_STA);
+                        ESP_LOGI("WMSV", "Switching off AccessPoint");
+                    }else{
+                        ESP_LOGI("WMSV", "Switching off AccessPoint...but it was already off.");
+                    }
+                    setStatus(WorkingState::KEEP_CONNECTION, FAR_FUTURE, FAR_FUTURE, FAR_FUTURE);
+                }
+                if(now_us>tTimeout_us){
+                    ESP_LOGW("WMSV", "Unexpected full Timeout in Webmanager while beeing in state %s. Go back to AccessPoint-Mode", ws2c(workingState));
+                    configureAndOpenAccessPointAndSetStatus();
+                }
+                xSemaphoreGive(webmanager_semaphore);
+                vTaskDelay(pdMS_TO_TICKS(4000));
             }
-            if(now_us>tTimeout_us){
-                ESP_LOGW("WMSV", "Unexpected full Timeout in Webmanager while beeing in state %s. Go back to AccessPoint-Mode", ws2c(workingState));
-                configureAndOpenAccessPointAndSetStatus();
-            }
-            xSemaphoreGive(webmanager_semaphore);
+
         }
 
 
@@ -303,8 +320,8 @@ namespace webmanager
                     }
                     else{
                         ESP_LOGW(TAG, "Establishing connection to SSID failed finally. Go back to Access Point Mode {'ssid':'%s', 'password':'%s'}", wifi_config_ap.ap.ssid, wifi_config_ap.ap.password);
-                        configureAndOpenAccessPointAndSetStatus();
                         this->sendWifiConnectionNotSuccessfulMessage();
+                        configureAndOpenAccessPointAndSetStatus();
                     }
                 }
                 else{
@@ -315,6 +332,7 @@ namespace webmanager
             case WIFI_EVENT_STA_CONNECTED:
                 staConnectionState = true;
                 create_or_update_sta_config();
+                fallbackToStoredStaConfig=true;
                 this->remainingAttempsToConnectAsSTA=RECONNECTS_ON_OPERATION;
                 //Das Timeout muss hier auf einen sinnvollen wert gesetzt werden, weil wir ja noch keine IP-Adresse haben
                 //erst wenn diese im IP-Handler gesetzt wird, kann das timeout auf FAR-FUTURE gesetzt werden
@@ -1101,9 +1119,8 @@ namespace webmanager
             ESP_LOGI(TAG, "Webmanager has been succcessfully initialized");
 
             // Configure and start timer
-            timSupervisor = xTimerCreate("timSupervisor", pdMS_TO_TICKS(4000), pdTRUE, this, [](TimerHandle_t t)
-                                 { ((webmanager::M *)(pvTimerGetTimerID(t)))->timSupervisor_cb(); });
-            xTimerStart(timSupervisor, portMAX_DELAY);
+            xTaskCreate([](void* arg){((webmanager::M *)(arg))->timSupervisor_cb();}, "wifi_supervisor", 4*4096, this, 12, nullptr);
+           
             return ESP_OK;
         }
 
