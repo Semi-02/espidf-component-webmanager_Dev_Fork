@@ -994,6 +994,9 @@ namespace webmanager
         esp_err_t Begin(const char *accessPointSsid, const char *accessPointPassword, const char *hostname, bool resetStoredWifiConnection, std::vector<iWebmanagerPlugin *> *plugins, bool init_netif_and_create_event_loop = true, esp_log_level_t wifiLogLevel=ESP_LOG_WARN)
         {
             ESP_LOGI(TAG, "Stating Webmanager");
+            
+            this->hostname=hostname;
+            
             if (strlen(accessPointPassword) < 8 && AP_AUTHMODE != WIFI_AUTH_OPEN){
                 ESP_LOGE(TAG, "Password too short for authentication. Minimal length is 8. Exiting Webmanager");
                 return ESP_FAIL;
