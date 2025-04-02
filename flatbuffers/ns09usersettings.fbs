@@ -1,7 +1,7 @@
 namespace usersettings;
 
 enum Namespace:uint32{
-    Value=10
+    Value=9
 }
 
 table StringSetting{

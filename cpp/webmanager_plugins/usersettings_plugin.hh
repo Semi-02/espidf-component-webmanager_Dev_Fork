@@ -1,7 +1,7 @@
 #pragma once
 #include "webmanager_interfaces.hh"
 #include "flatbuffers/flatbuffers.h"
-#include "flatbuffers_cpp/ns10usersettings_generated.h"
+#include "flatbuffers_cpp/ns09usersettings_generated.h"
 
 struct SettingCfg
 {

@@ -1,7 +1,7 @@
 namespace journal;
 
 enum Namespace:uint32{
-    Value=11
+    Value=10
 }
 
 table RequestJournal{}
