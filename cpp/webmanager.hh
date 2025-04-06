@@ -238,39 +238,24 @@ namespace webmanager
             nvs_handle handle;
             esp_err_t ret = ESP_OK;
             size_t sz;
-            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition");
+            GOTO_ERROR_ON_ERROR(nvs_open_from_partition(NVS_PARTITION, WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle), "Unable to open nvs partition '%s' and namespace '%s' ", NVS_PARTITION, WIFI_NVS_NAMESPACE);
             sz = sizeof(wifi_config_sta.sta.ssid);
-            ret = nvs_get_str(handle, nvs_key_wifi_ssid, (char *)wifi_config_sta.sta.ssid, &sz);
-            if (ret != ESP_OK)
-            {
-                ESP_LOGI(TAG, "Unable to read Wifi SSID from NVS");
-                goto error;
-            }
-
+            GOTO_ERROR_ON_ERROR(nvs_get_str(handle, nvs_key_wifi_ssid, (char *)wifi_config_sta.sta.ssid, &sz), "Unable to read Wifi SSID from NVS");
             sz = sizeof(wifi_config_sta.sta.password);
-            ret = nvs_get_str(handle, nvs_key_wifi_password, (char *)wifi_config_sta.sta.password, &sz);
-            if (ret != ESP_OK)
-            {
-                ESP_LOGI(TAG, "Unable to read Wifi password from NVS");
-                goto error;
-            }
-            ESP_LOGI(TAG, "Successfully read Wifi credentials: ssid: %s password: %s", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
+            GOTO_ERROR_ON_ERROR(nvs_get_str(handle, nvs_key_wifi_password, (char *)wifi_config_sta.sta.password, &sz), "Unable to read Wifi password from NVS");
+            ESP_LOGI(TAG, "Successfully read Wifi credentials {'ssid':'%s', 'password':'%s'}", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
             ret = (wifi_config_sta.sta.ssid[0] == '\0') ? ESP_FAIL : ESP_OK;
         error:
             nvs_close(handle);
             return ret;
         }
 
-
         void supervisorTask(){
             while(true){
                 this->Supervise();
                 vTaskDelay(pdMS_TO_TICKS(4000));
             }
-
         }
-
-
 
         void wifi_event_handler(esp_event_base_t event_base, int32_t event_id, void *event_data)
         {
@@ -302,6 +287,7 @@ namespace webmanager
                 }
                 break;
             case WIFI_EVENT_STA_CONNECTED:
+                ESP_LOGI(TAG, "Established connection to SSID successfully. Now, waiting for a IP address... {'ssid':'%s', 'password':'%s'}", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
                 staConnectionState = true;
                 create_or_update_sta_config();
                 fallbackToStoredStaConfig=true;
@@ -502,7 +488,7 @@ namespace webmanager
         esp_err_t handleRequestWifiConnect(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, const wifimanager::RequestWifiConnect *wifiConnect)
         {
 
-            esp_err_t ret{ESP_OK}; // necessary for ESP_GOTO_ON_FALSE
+            esp_err_t ret{ESP_OK};
             time_t now_us{0};
             const char *ssid = wifiConnect->ssid()->c_str();
             const char *password = wifiConnect->password()->c_str();
@@ -510,9 +496,12 @@ namespace webmanager
             len = strlen(ssid);
             ESP_GOTO_ON_FALSE(len <= MAX_SSID_LEN - 1, ESP_FAIL, negativeresponse, TAG, "SSID too long");
             len = strlen(password);
-            ESP_GOTO_ON_FALSE(len > 0, ESP_FAIL, negativeresponse, TAG, "no password given");
-            snprintf((char *)wifi_config_sta.sta.ssid, MAX_SSID_LEN - 1, ssid); // TODO: Maximum number of bytes to be used in the buffer. The generated string has a length of at most n-1, leaving space for the additional terminating null character.
-            snprintf((char *)wifi_config_sta.sta.password, MAX_PASSPHRASE_LEN - 1, password);
+            ESP_GOTO_ON_FALSE(len <= MAX_PASSPHRASE_LEN - 1, ESP_FAIL, negativeresponse, TAG, "PASSPHRASE too long");
+            ESP_GOTO_ON_FALSE(len > 0, ESP_FAIL, negativeresponse, TAG, "no PASSPHRASE given");
+            strncpy((char *)wifi_config_sta.sta.ssid, ssid, MAX_SSID_LEN - 1);
+            strncpy((char *)wifi_config_sta.sta.password, password, MAX_PASSPHRASE_LEN - 1 );
+            wifi_config_sta.sta.ssid[MAX_SSID_LEN - 1] = '\0'; 
+            wifi_config_sta.sta.password[MAX_PASSPHRASE_LEN - 1] = '\0';
             ESP_LOGI(TAG, "Got a new ssid '%s' and password '%s' from browser.", wifi_config_sta.sta.ssid, wifi_config_sta.sta.password);
             if (!xSemaphoreTake(webmanager_semaphore, portMAX_DELAY))
                 return ESP_FAIL;
