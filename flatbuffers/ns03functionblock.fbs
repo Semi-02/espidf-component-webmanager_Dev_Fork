@@ -1,35 +1,51 @@
 namespace functionblock;
 
-enum Namespace:uint32{
-    Value=3
+enum Namespace:uint32 {
+    Value = 3
 }
 
-union Requests{
+// Request and Response for FBD
+table RequestFbdRun {}
+table ResponseFbdRun {}
+
+// Request and Response for SFC
+table RequestSFCRun {
+    sfc_data: string; // JSON data for SFC
+}
+table ResponseSFCRun {
+    status: string; // Status of the SFC execution
+}
+
+// Debug Data
+table RequestDebugData {}
+table ResponseDebugData {
+    debug_info_hash: uint32;
+    bools: [bool];
+    integers: [int32];
+    floats: [float];
+    colors: [uint32];
+}
+
+// Union for Requests
+union Requests {
     RequestFbdRun,
-    RequestDebugData,
+    RequestSFCRun, // Added SFC request
+    RequestDebugData
 }
 
-union Responses{
+// Union for Responses
+union Responses {
     ResponseFbdRun,
-    ResponseDebugData,
+    ResponseSFCRun, // Added SFC response
+    ResponseDebugData
 }
 
-table RequestFbdRun{}
-table ResponseFbdRun{}
-
-table RequestDebugData{}
-table ResponseDebugData{
-    debug_info_hash:uint32;
-    bools:[bool];
-    integers:[int32];
-    floats:[float];
-    colors:[uint32];
+// Wrapper for Requests
+table RequestWrapper {
+    request: Requests;
 }
 
-table RequestWrapper{
-    request:Requests;
-}
-
-table ResponseWrapper{
-    response:Responses;
+// Wrapper for Responses
+table ResponseWrapper {
+    response: Responses;
 }
