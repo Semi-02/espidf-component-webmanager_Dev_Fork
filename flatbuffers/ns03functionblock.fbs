@@ -9,12 +9,8 @@ table RequestFbdRun {}
 table ResponseFbdRun {}
 
 // Request and Response for SFC
-table RequestSFCRun {
-    sfc_data: string; // JSON data for SFC
-}
-table ResponseSFCRun {
-    status: string; // Status of the SFC execution
-}
+table RequestSFCRun {}
+table ResponseSFCRun {}
 
 // Debug Data
 table RequestDebugData {}
